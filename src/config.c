@@ -638,7 +638,8 @@ accept_resolver_client(struct ResolverConfig *resolver, const char *cidr) {
     unsigned char network[16];
     unsigned int prefix;
     if (resolver->client != NULL ||
-            (!resolv_is_country(cidr) && !parse_client_cidr(cidr, network, &prefix))) {
+            (strcmp(cidr, "fallback") != 0 && !resolv_is_country(cidr) &&
+             !parse_client_cidr(cidr, network, &prefix))) {
         err("Invalid or repeated resolver client: %s", cidr);
         return -1;
     }

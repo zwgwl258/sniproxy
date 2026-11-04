@@ -151,6 +151,7 @@ resolv_cancel(struct ResolvQuery *query_handle) {
 
 struct ResolvQuery {
     struct dns_ctx *ctx;
+    char *fallback_hostname;
     void (*client_cb)(struct Address *, void *);
     void (*client_free_cb)(void *);
     void *client_cb_data;
@@ -176,6 +177,7 @@ struct Resolver {
 
 static struct Resolver default_resolver;
 static struct Resolver *client_resolvers;
+static struct Resolver *fallback_resolver;
 #ifdef HAVE_LIBMAXMINDDB
 static MMDB_s country_db;
 static int country_db_open;
@@ -221,6 +223,8 @@ static void dns_query_v4_cb(struct dns_ctx *, struct dns_rr_a4 *, void *);
 static void dns_query_v6_cb(struct dns_ctx *, struct dns_rr_a6 *, void *);
 static void dns_timer_setup_cb(struct dns_ctx *, int, void *);
 static void process_client_callback(struct ResolvQuery *);
+static void submit_queries(struct ResolvQuery *, const char *);
+static void retry_fallback(struct ResolvQuery *);
 static inline int all_queries_are_null(struct ResolvQuery *);
 static struct Address *choose_ipv4_first(struct ResolvQuery *);
 static struct Address *choose_ipv6_first(struct ResolvQuery *);
@@ -286,12 +290,15 @@ resolv_add_client(struct ev_loop *loop, const char *cidr, char **nameservers,
         memcpy(resolver->country, cidr, 2);
     else
         resolver->family = parse_client_cidr(cidr, resolver->network, &resolver->prefix);
-    if ((!resolver->family && !resolver->country[0]) ||
+    int is_fallback = strcmp(cidr, "fallback") == 0;
+    if ((!is_fallback && !resolver->family && !resolver->country[0]) ||
             (resolver->ctx = dns_new(NULL)) == NULL) {
         free(resolver);
         return -1;
     }
     open_resolver(resolver, loop, nameservers, search, mode);
+    if (is_fallback)
+        fallback_resolver = resolver;
     resolver->next = client_resolvers;
     client_resolvers = resolver;
     return 0;
@@ -313,6 +320,7 @@ resolv_shutdown(struct ev_loop *loop) {
         dns_free(resolver->ctx);
         free(resolver);
     }
+    fallback_resolver = NULL;
     close_resolver(&default_resolver, loop);
 #ifdef HAVE_LIBMAXMINDDB
     if (country_db_open) {
@@ -372,6 +380,8 @@ resolv_query_client(const char *hostname, int mode, const struct sockaddr_storag
         return NULL;
     }
     cb_data->ctx = ctx;
+    cb_data->fallback_hostname = (resolver != &default_resolver && fallback_resolver != NULL)
+        ? strdup(hostname) : NULL;
     cb_data->client_cb = client_cb;
     cb_data->client_free_cb = client_free_cb;
     cb_data->client_cb_data = client_cb_data;
@@ -381,6 +391,23 @@ resolv_query_client(const char *hostname, int mode, const struct sockaddr_storag
     cb_data->response_count = 0;
     cb_data->responses = NULL;
 
+    submit_queries(cb_data, hostname);
+    if (all_queries_are_null(cb_data))
+        retry_fallback(cb_data);
+
+    if (all_queries_are_null(cb_data)) {
+        if (cb_data->client_free_cb != NULL)
+            cb_data->client_free_cb(cb_data->client_cb_data);
+        free(cb_data->fallback_hostname);
+        free(cb_data);
+        return NULL;
+    }
+    return cb_data;
+}
+
+static void
+submit_queries(struct ResolvQuery *cb_data, const char *hostname) {
+    struct dns_ctx *ctx = cb_data->ctx;
     /* Submit A and AAAA queries */
     if (cb_data->resolv_mode != RESOLV_MODE_IPV6_ONLY) {
         cb_data->queries[0] = dns_submit_a4(ctx,
@@ -398,14 +425,17 @@ resolv_query_client(const char *hostname, int mode, const struct sockaddr_storag
             err("Failed to submit DNS query: %s", dns_strerror(dns_status(ctx)));
     }
 
-    if (all_queries_are_null(cb_data)) {
-        if (cb_data->client_free_cb != NULL)
-            cb_data->client_free_cb(cb_data->client_cb_data);
-        free(cb_data);
-        cb_data = NULL;
-    }
+}
 
-    return cb_data;
+static void
+retry_fallback(struct ResolvQuery *query) {
+    char *hostname = query->fallback_hostname;
+    if (hostname == NULL)
+        return;
+    query->fallback_hostname = NULL;
+    query->ctx = fallback_resolver->ctx;
+    submit_queries(query, hostname);
+    free(hostname);
 }
 
 void
@@ -427,6 +457,10 @@ resolv_cancel(struct ResolvQuery *query_handle) {
     if (cb_data->client_free_cb != NULL)
         cb_data->client_free_cb(cb_data->client_cb_data);
 
+    for (size_t i = 0; i < cb_data->response_count; i++)
+        free(cb_data->responses[i]);
+    free(cb_data->responses);
+    free(cb_data->fallback_hostname);
     free(cb_data);
 }
 
@@ -538,6 +572,11 @@ process_client_callback(struct ResolvQuery *cb_data) {
     else
         best_address = choose_any(cb_data);
 
+    if (best_address == NULL) {
+        retry_fallback(cb_data);
+        if (!all_queries_are_null(cb_data))
+            return;
+    }
     cb_data->client_cb(best_address, cb_data->client_cb_data);
 
     for (size_t i = 0; i < cb_data->response_count; i++)
@@ -546,6 +585,7 @@ process_client_callback(struct ResolvQuery *cb_data) {
     free(cb_data->responses);
     if (cb_data->client_free_cb != NULL)
         cb_data->client_free_cb(cb_data->client_cb_data);
+    free(cb_data->fallback_hostname);
     free(cb_data);
 }
 
