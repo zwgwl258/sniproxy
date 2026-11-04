@@ -398,6 +398,21 @@ def dns_benchmark_status():
         return "<p>逐域名测速结果已过期，暂按 DNS 探测结果选优。</p>"
     if not report.get("by_domain"):
         return "<p>逐域名测速未运行：需要可识别的已配置域名和兜底 DNS。</p>"
+    groups = report.get("groups", {})
+    overview = ""
+    if groups:
+        group_rows = []
+        for index, (key, group) in enumerate(groups.items(), 1):
+            members = key.split(",")
+            name = html.escape(members[0])
+            preferred = html.escape(group.get("preferred") or "暂无")
+            group_rows.append(f"<tr><td>{index}. {name}</td><td>{len(members)}</td><td>{preferred}</td></tr>")
+        overview = (f"<p><strong>已测速 DNS 分组：{len(groups)} 组</strong>（每 30 分钟）</p>"
+                    "<table><thead><tr><th>分组（首个可测速域名）</th><th>测速域名数</th>"
+                    "<th>首选兜底 DNS</th></tr></thead><tbody>"
+                    + "".join(group_rows) + "</tbody></table>")
+    else:
+        overview = "<p>暂无分组测速结果；以下为逐域名结果。</p>"
     def metric(value):
         passed, total, ms = value
         return f"{passed}/{total} · {ms:g} ms" if ms is not None else f"{passed}/{total} · —"
@@ -413,7 +428,7 @@ def dns_benchmark_status():
                         "<table><thead><tr><th>兜底 DNS</th><th>代理成功／总数 · 首字节</th>"
                         "<th>DNS 成功／总数 · 解析耗时</th></tr></thead>"
                         f"<tbody>{rows}</tbody></table></details>")
-    return (f"<details><summary>逐域名综合测速（{len(sections)} 个，每 30 分钟）</summary>"
+    return (overview + f"<details><summary>查看逐域名测速明细（{len(sections)} 个）</summary>"
             + "".join(sections) + "</details>")
 
 
