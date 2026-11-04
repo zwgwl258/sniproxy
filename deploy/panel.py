@@ -584,7 +584,7 @@ class Panel(BaseHTTPRequestHandler):
             return False
         return True
 
-    def page(self, message="", domain_input=None, rules_open=False):
+    def page(self, message="", domain_input=None):
         current = CONFIG.read_text(encoding="utf-8", errors="replace")
         rules = rule_forms(current)
         fallback_dns = html.escape(next((dns for kind, _, _, source, dns in
@@ -615,6 +615,8 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 .rule-actions button[value=delete_rule]{{color:#a12626}}
 .rule-type{{color:#435264;font-size:.875rem}}
 .rule-toolbar{{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}}
+#saved-rules{{margin:1rem 0;padding:.8rem 0;border-block:1px solid #e4eaf0}}
+#saved-rules h3{{margin:0 0 .5rem}}
 #rule-count{{color:#435264}}
 @media(max-width:640px){{.rule-row{{grid-template-columns:minmax(0,1fr) auto}}.rule-type{{grid-column:1/-1}}.rule-fields{{flex-wrap:wrap}}}}
 </style><h1>SNIProxy 管理</h1><p>代理状态：{status}</p><pre>{message}</pre>
@@ -641,13 +643,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <input id="dns" name="dns" placeholder="154.83.83.86, 149.28.158.78" required>
 <small>点击「选择国家／地区」，按中文名、英文名或两字母代码搜索后选择；也可直接输入 IP 或网段。按代理看到的 TCP 来源 IP 查询本地国家库。优先级：IP／网段 → 国家／地区 → 默认 DNS。 <a href="https://db-ip.com/" rel="noreferrer">IP Geolocation by DB-IP</a></small>
 <button name="action" value="client_dns">添加并应用</button></form>
-<form method="post" action="/">
-<input type="hidden" name="nonce" value="{NONCE}">
-<label for="fallback-dns">全局兜底 DNS</label>
-<input id="fallback-dns" name="dns" value="{fallback_dns}" placeholder="1.1.1.1, 8.8.8.8">
-<small>客户端专用 DNS 未返回可用地址时才查询。最多 6 个 IP，逗号或空格分隔；清空后保存可关闭。</small>
-<button name="action" value="fallback_dns">保存兜底 DNS</button></form></section>
-<details id="saved-rules" {"open" if rules_open else ""}><summary>已添加客户端 DNS：修改或删除</summary>
+<div id="saved-rules"><h3>已添加客户端 DNS：修改或删除</h3>
 <label for="rule-search">搜索已添加的客户端 DNS</label>
 <div class="rule-toolbar">
 <input id="rule-search" type="search" placeholder="搜索客户端来源或 DNS 地址" autocomplete="off">
@@ -656,7 +652,13 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <button id="rule-previous" type="button">上一页</button>
 <button id="rule-next" type="button">下一页</button>
 <span id="rule-count" aria-live="polite"></span>
-</nav>{rules}</details>
+</nav>{rules}</div>
+<form method="post" action="/">
+<input type="hidden" name="nonce" value="{NONCE}">
+<label for="fallback-dns">全局兜底 DNS</label>
+<input id="fallback-dns" name="dns" value="{fallback_dns}" placeholder="1.1.1.1, 8.8.8.8">
+<small>客户端专用 DNS 未返回可用地址时才查询。最多 6 个 IP，逗号或空格分隔；清空后保存可关闭。</small>
+<button name="action" value="fallback_dns">保存兜底 DNS</button></form></section>
 <details><summary>高级配置：查看、编辑或删除规则</summary>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
@@ -737,8 +739,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
             message = "操作失败或超时，请检查代理状态和日志。"
         draft = (form.get("domain", [""])[0] if action == "save_domains" and
                  message not in ("配置已保存并应用。", "域名列表没有变化。") else None)
-        self.page(message, draft,
-                  rules_open=action in ("edit_rule", "delete_rule"))
+        self.page(message, draft)
 
 
 class Server(HTTPServer):
