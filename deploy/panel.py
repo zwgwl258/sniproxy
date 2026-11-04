@@ -406,10 +406,18 @@ def dns_benchmark_status():
             members = key.split(",")
             name = html.escape(members[0])
             preferred = html.escape(group.get("preferred") or "暂无")
-            group_rows.append(f"<tr><td>{index}. {name}</td><td>{len(members)}</td><td>{preferred}</td></tr>")
+            coverage = group.get("coverage")
+            result = f"{coverage}/{len(members)}" if coverage is not None else "—"
+            reason = html.escape(group.get("reason", "旧报告，等待复测"))
+            diag = group.get("diagnostics")
+            if diag:
+                reason += (f"；DNS 失败 {diag['dns_failed']}，连接/TLS 未获响应 {diag['transport_failed']}"
+                           f"，HTTP 错误 {diag['http_failed']}")
+            group_rows.append(f"<tr><td>{index}. {name}</td><td>{result}</td>"
+                              f"<td>{preferred}</td><td>{reason}</td></tr>")
         overview = (f"<p><strong>已测速 DNS 分组：{len(groups)} 组</strong>（每 30 分钟）</p>"
-                    "<table><thead><tr><th>分组（首个可测速域名）</th><th>测速域名数</th>"
-                    "<th>首选兜底 DNS</th></tr></thead><tbody>"
+                    "<table><thead><tr><th>分组（首个可测速域名）</th><th>本轮通过</th>"
+                    "<th>首选兜底 DNS</th><th>选用原因</th></tr></thead><tbody>"
                     + "".join(group_rows) + "</tbody></table>")
     else:
         overview = "<p>暂无分组测速结果；以下为逐域名结果。</p>"

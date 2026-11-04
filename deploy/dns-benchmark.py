@@ -52,7 +52,7 @@ def dns_ms(server, domain):
     return None
 
 
-def proxy_ms(port, domain):
+def proxy_probe(port, domain):
     result = command("curl", "-q", "--noproxy", "*", "--http1.1", "--head",
                      "--silent", "--output", "/dev/null", "--connect-timeout", "3",
                      "--max-time", "4", "--connect-to", f"{domain}:443:127.0.0.1:{port}",
@@ -61,14 +61,19 @@ def proxy_ms(port, domain):
     try:
         status, elapsed = result.split()
         if 200 <= int(status) < 400:
-            return round(float(elapsed) * 1000)
+            return round(float(elapsed) * 1000), int(status)
+        return None, int(status)
     except ValueError:
         pass
-    return None
+    return None, 0
+
+
+def proxy_ms(port, domain):
+    return proxy_probe(port, domain)[0]
 
 
 def measure(server, domains):
-    dns, proxy = [], []
+    dns, proxy, status = [], [], []
     with tempfile.TemporaryDirectory() as tmp:
         config = Path(tmp) / "probe.conf"
         with socket.socket() as listener:
@@ -91,7 +96,9 @@ def measure(server, domains):
                         time.sleep(0.05)
                 for domain in domains:
                     dns.append(dns_ms(server, domain))
-                    proxy.append(proxy_ms(port, domain) if proc.poll() is None else None)
+                    elapsed, code = proxy_probe(port, domain) if proc.poll() is None else (None, 0)
+                    proxy.append(elapsed)
+                    status.append(code)
             finally:
                 if proc.poll() is None:
                     proc.terminate()
@@ -99,7 +106,7 @@ def measure(server, domains):
                         proc.wait(timeout=1)
                     except subprocess.TimeoutExpired:
                         proc.kill()
-    return {"dns": dns, "proxy": proxy}
+    return {"dns": dns, "proxy": proxy, "status": status}
 
 
 def summarize(rounds, servers):
@@ -143,7 +150,7 @@ def main():
             results = pool.map(lambda job: measure(job[0], domains[job[1]:job[1] + 16]), jobs)
             for (ip, offset), result in zip(jobs, results):
                 for i, domain in enumerate(domains[offset:offset + 16]):
-                    latest[domain][ip] = {kind: [result[kind][i]] for kind in ("dns", "proxy")}
+                    latest[domain][ip] = {kind: [result[kind][i]] for kind in ("dns", "proxy", "status")}
         for domain, sample in latest.items():
             prior = old.get("by_domain", {}).get(domain, {})
             rounds = [*prior.get("rounds", [])[-2:], sample]
@@ -163,11 +170,26 @@ def main():
                 prior = old.get("groups", {}).get(key, {})
                 rounds = [*prior.get("rounds", [])[-2:], sample]
                 scores = summarize(rounds, servers)
+                # The first testable member is the group's key hostname.
+                key_passed = {ip for ip in servers if sample[ip]["proxy"][0] is not None}
                 eligible = {ip: score for ip, score in scores.items()
-                            if all(ms is not None for ms in sample[ip]["proxy"])}
+                            if not key_passed or ip in key_passed}
                 preferred, pending = select(eligible, prior.get("preferred"), prior.get("pending"), sample)
-                preferred = preferred or prior.get("preferred") or servers[0]
-                groups[key] = dict(rounds=rounds, preferred=preferred, pending=pending)
+                reason = ("关键域名通过，按覆盖率选优" if key_passed else "关键域名未通过，按覆盖率选优")
+                if not preferred:
+                    preferred = prior.get("preferred") or servers[0]
+                    reason = "无 HTTPS 成功，保留原首选" if prior.get("preferred") else "无 HTTPS 成功，使用列表首台"
+                elif pending:
+                    reason = "候选待复测，保留原首选"
+                selected = sample[preferred]
+                diagnostics = dict(
+                    dns_failed=sum(ms is None for ms in selected["dns"]),
+                    transport_failed=sum(latest[d][preferred]["status"][0] == 0 and
+                                         latest[d][preferred]["dns"][0] is not None for d in members),
+                    http_failed=sum(latest[d][preferred]["status"][0] >= 400 for d in members))
+                groups[key] = dict(rounds=rounds, preferred=preferred, pending=pending, reason=reason,
+                                   coverage=sum(ms is not None for ms in selected["proxy"]),
+                                   diagnostics=diagnostics)
                 for domain in members:
                     by_domain[domain]["preferred"] = preferred
                     by_domain[domain]["group"] = members[0]
