@@ -499,11 +499,13 @@ def add_client_dns(config, client, dns, *, fallback=False):
         else:
             source = str(ipaddress.ip_network(source, strict=True))
         servers = [ipaddress.ip_address(item) for item in re.split(r"[\s,]+", dns.strip()) if item]
-        if not 1 <= len(servers) <= 6 or any("%" in str(server) for server in servers):
+        if not servers or (not fallback and len(servers) > 6) or any("%" in str(server) for server in servers):
             raise ValueError
     except ValueError as error:
         if str(error) == "missing-country-db":
             raise ValueError("请先安装国家数据库：重新运行一键安装脚本，或手动放到 /etc/sniproxy-managed/country.mmdb。") from None
+        if fallback:
+            raise ValueError("请输入有效的 DNS IP，每行一个。") from None
         raise ValueError("请输入两字母国家/地区代码、有效 IP 或网段，以及 1 至 6 个 DNS IP。") from None
     nameservers = "".join(f"    nameserver {server}\n" for server in servers)
     return (config.rstrip() + f"\n\nresolver {{\n    client {source}\n" +
@@ -683,6 +685,7 @@ class Panel(BaseHTTPRequestHandler):
 <title>SNIProxy 管理</title><style>
 body{{max-width:960px;margin:2rem auto;padding:0 1rem;font:16px system-ui}}
 textarea{{width:100%;min-height:25rem;box-sizing:border-box;font:14px monospace}}
+#fallback-dns{{display:block;width:min(100%,34rem);min-height:0;resize:vertical}}
 section,details{{border:1px solid #ccd5df;border-radius:.6rem;padding:1rem;margin:1rem 0}}
 label{{display:block;margin:.55rem 0 .2rem}}
 input{{width:100%;max-width:34rem;padding:.5rem;box-sizing:border-box}}
@@ -745,7 +748,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <div id="dns-health">{dns_health_status()}</div>
 <label for="fallback-dns">全局兜底 DNS</label>
 <textarea id="fallback-dns" name="dns" rows="6" spellcheck="false" placeholder="1.1.1.1&#10;8.8.8.8">{fallback_dns}</textarea>
-<small>未命中 IP／网段或国家规则时直接使用；客户端专用 DNS 未返回可用地址时也会尝试。每行一个 IP，最多 6 个；清空后保存可关闭。</small>
+<small>未命中 IP／网段或国家规则时直接使用；客户端专用 DNS 未返回可用地址时也会尝试。每行一个 IP；清空后保存可关闭。</small>
 <button name="action" value="fallback_dns">保存兜底 DNS</button></form></section>
 <details><summary>修改面板密码</summary>{password_form}</details>
 <details><summary>AdGuard Home 后台地址设置</summary>

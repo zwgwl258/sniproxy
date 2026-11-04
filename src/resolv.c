@@ -152,7 +152,9 @@ resolv_cancel(struct ResolvQuery *query_handle) {
 struct ResolvQuery {
     struct dns_ctx *ctx;
     char *fallback_hostname;
-    struct dns_ctx *fallback_next;
+    const struct DnsProbe *fallback_next;
+    const struct DnsProbe *fallback_first;
+    int fallback_preferred_pending;
     void (*client_cb)(struct Address *, void *);
     void (*client_free_cb)(void *);
     void *client_cb_data;
@@ -385,10 +387,12 @@ best_fallback_probe(void) {
     return best;
 }
 
-static struct dns_ctx *
+static const struct DnsProbe *
 preferred_fallback(void) {
+    if (fallback_resolver == NULL)
+        return NULL;
     const struct DnsProbe *best = best_fallback_probe();
-    return best != NULL ? best->endpoint.ctx : fallback_resolver->ctx;
+    return best != NULL ? best : fallback_resolver->probes;
 }
 
 
@@ -414,7 +418,9 @@ resolv_add_client(struct ev_loop *loop, const char *cidr, char **nameservers,
         free(resolver);
         return -1;
     }
-    open_resolver(resolver, loop, nameservers, search, mode, 0);
+    /* Each fallback server has its own context; udns limits servers per context. */
+    char *first[] = {nameservers != NULL ? nameservers[0] : NULL, NULL};
+    open_resolver(resolver, loop, is_fallback ? first : nameservers, search, mode, 0);
     start_probes(resolver, cidr, nameservers);
     if (is_fallback)
         fallback_resolver = resolver;
@@ -500,8 +506,9 @@ resolv_query_client(const char *hostname, int mode, const struct sockaddr_storag
     if (fallback_resolver != NULL &&
             (resolver == &default_resolver || resolver_unhealthy(resolver)))
         resolver = fallback_resolver;
-    struct dns_ctx *ctx = resolver == fallback_resolver
-        ? preferred_fallback() : resolver->ctx;
+    const struct DnsProbe *preferred = preferred_fallback();
+    struct dns_ctx *ctx = resolver == fallback_resolver && preferred != NULL
+        ? preferred->endpoint.ctx : resolver->ctx;
 
     /*
      * Wrap udns's call back in our own
@@ -512,9 +519,12 @@ resolv_query_client(const char *hostname, int mode, const struct sockaddr_storag
         return NULL;
     }
     cb_data->ctx = ctx;
-    cb_data->fallback_next = fallback_resolver == NULL ? NULL :
-        resolver != fallback_resolver ? preferred_fallback() :
-        ctx != fallback_resolver->ctx ? fallback_resolver->ctx : NULL;
+    cb_data->fallback_first = preferred;
+    cb_data->fallback_preferred_pending = resolver != fallback_resolver;
+    cb_data->fallback_next = preferred == NULL ? NULL :
+        resolver != fallback_resolver ? preferred : fallback_resolver->probes;
+    if (resolver == fallback_resolver && cb_data->fallback_next == preferred && preferred != NULL)
+        cb_data->fallback_next = preferred->next;
     cb_data->fallback_hostname = cb_data->fallback_next != NULL ? strdup(hostname) : NULL;
     cb_data->client_cb = client_cb;
     cb_data->client_free_cb = client_free_cb;
@@ -567,9 +577,13 @@ retry_fallback(struct ResolvQuery *query) {
     if (hostname == NULL)
         return;
     do {
-        query->ctx = query->fallback_next;
-        query->fallback_next = query->ctx == fallback_resolver->ctx
-            ? NULL : fallback_resolver->ctx;
+        const struct DnsProbe *next = query->fallback_next;
+        query->ctx = next->endpoint.ctx;
+        query->fallback_next = query->fallback_preferred_pending
+            ? fallback_resolver->probes : next->next;
+        query->fallback_preferred_pending = 0;
+        if (query->fallback_next == query->fallback_first)
+            query->fallback_next = query->fallback_first->next;
         submit_queries(query, hostname);
     } while (all_queries_are_null(query) && query->fallback_next != NULL);
     if (query->fallback_next == NULL) {

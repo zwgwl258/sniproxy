@@ -114,6 +114,11 @@ resolver {{
 resolver {{
     client fallback
     nameserver 127.0.0.60
+    nameserver 127.0.0.63
+    nameserver 127.0.0.64
+    nameserver 127.0.0.65
+    nameserver 127.0.0.66
+    nameserver 127.0.0.67
     nameserver 127.0.0.61
     mode ipv4_only
 }}
