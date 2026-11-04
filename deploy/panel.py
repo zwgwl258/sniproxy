@@ -402,26 +402,37 @@ def apply(data, rollback=False):
     return "新配置启动失败，已恢复原配置。请查看日志。"
 
 
-def add_domain(config, value):
+DOMAIN_RULE = r'(?:\\[^\r\n]|"(?:\\[^\r\n]|[^"\\\r\n])*"|[^ \t\r\n#;{}"\\\x00])+[ \t]+\*'
+
+
+def domain_entries(value):
     label = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-    existing = {" ".join(line.split()) for line in config.splitlines()}
-    rules = []
     for number, line in enumerate(value.splitlines(), 1):
         line = line.strip()
         if not line:
             continue
-        legacy = re.fullmatch(r"\.\*([a-zA-Z0-9-]+(?:\\\.[a-zA-Z0-9-]+)+)\$[ \t]+\*", line)
-        domain = (legacy[1].replace(r"\.", ".") if legacy else line.rstrip(".")).lower()
+        if re.fullmatch(DOMAIN_RULE, line):
+            yield line, None
+            continue
+        domain = line.rstrip(".").lower()
         if len(domain) > 253 or not re.fullmatch(rf"{label}(?:\.{label})+", domain):
-            raise ValueError(f"第 {number} 行格式无效；请填域名或 .*netflix\\.ca$ * 形式的规则。整批未保存。")
-        entry = (".*" + legacy[1] + "$ *" if legacy else
-                 "^(.*[.])?" + domain.replace(".", "[.]") + "$ *")
+            raise ValueError(f"第 {number} 行格式无效；请填域名或正则表达式加 *。整批未保存。")
+        yield "^(.*[.])?" + domain.replace(".", "[.]") + "$ *", domain
+
+
+def add_domain(config, value):
+    existing = {line.strip() for line in config.splitlines()}
+    rules = []
+    for entry, _ in domain_entries(value):
         if entry not in existing:
             existing.add(entry)
             rules.append("    " + entry + "\n")
     if not rules:
         raise ValueError("没有可添加的规则：输入为空或规则已存在。")
-    rule = "".join(rules)
+    return insert_domains(config, "".join(rules))
+
+
+def insert_domains(config, rule):
     tables = list(re.finditer(r"(?m)^[ \t]*table[ \t]*\{[^\S\n]*(?:#[^\n]*)?$\n", config))
     declarations = re.findall(r"(?m)^[ \t]*table(?:[ \t]+|(?=\{))", config)
     if not declarations:
@@ -466,7 +477,7 @@ def managed_rules(config):
     for block in re.finditer(r"(?m)^([ \t]*)(table|resolver)[ \t]*\{[ \t]*(?:#[^\n]*)?\n([\s\S]*?)^[ \t]*\}[ \t]*(?:#[^\n]*)?$\n?", config):
         body = block[3]
         if block[2] == "table":
-            pattern = r"(?m)^[ \t]*((?:\.\*|\^\(\.\*\[\.\]\)\?)[A-Za-z0-9-]+(?:(?:\\\.|\[\.\])[A-Za-z0-9-]+)+\$[ \t]+\*)[ \t]*$\n?"
+            pattern = rf"(?m)^[ \t]*({DOMAIN_RULE})[ \t]*$\n?"
             for rule in re.finditer(pattern, body):
                 yield ("domain", block.start(3) + rule.start(), block.start(3) + rule.end(), rule[1], "")
         else:
@@ -477,6 +488,8 @@ def managed_rules(config):
 
 
 def domain_name(rule):
+    if not re.fullmatch(r"(?:\.\*|\^\(\.\*\[\.\]\)\?)[A-Za-z0-9-]+(?:(?:\\\.|\[\.\])[A-Za-z0-9-]+)+\$[ \t]+\*", rule):
+        return rule
     return (rule.split()[0].removeprefix("^(.*[.])?").removeprefix(".*")
             .removesuffix("$").replace(r"\.", ".").replace("[.]", "."))
 
@@ -484,26 +497,28 @@ def domain_name(rule):
 def replace_domains(config, revision, value):
     if revision != rule_revision(config):
         raise ValueError("配置已变化，请刷新页面再保存。")
-    lines = [line.strip() for line in value.splitlines() if line.strip()]
-    # Validate the entire input before dropping any saved rules.
-    if lines:
-        add_domain("", value)
-    names = {line.rstrip(".").lower() for line in lines if not line.startswith(".*")}
-    explicit = {" ".join(line.split()) for line in lines if line.startswith(".*")}
-    retained = set()
-    for kind, start, end, rule, _ in reversed(list(managed_rules(config))):
-        if kind != "domain":
-            continue
-        name = domain_name(rule).lower()
-        if name in names or " ".join(rule.split()) in explicit:
-            retained.add(name)
+    old = [(start, end, rule) for kind, start, end, rule, _ in managed_rules(config)
+           if kind == "domain"]
+    aliases = {}
+    for _, _, rule in old:
+        name = domain_name(rule)
+        if name != rule:
+            aliases.setdefault(name.lower(), []).append(rule)
+    entries = list(dict.fromkeys(
+        rule for entry, name in domain_entries(value) for rule in aliases.get(name, [entry])))
+    rows = ["    " + entry + "\n" for entry in entries]
+    if not old:
+        return insert_domains(config, "".join(rows)) if rows else config
+    for i in reversed(range(len(old))):
+        start, end, rule = old[i]
+        if i == len(old) - 1:
+            replacement = "".join(rows[i:])
+        elif i < len(rows) and entries[i] == rule:
+            replacement = config[start:end]
         else:
-            config = config[:start] + config[end:]
-    existing = {" ".join(line.split()) for line in config.splitlines()}
-    added = [line for line in lines if (
-        " ".join(line.split()) not in existing if line.startswith(".*")
-        else line.rstrip(".").lower() not in retained)]
-    return add_domain(config, "\n".join(added)) if added else config
+            replacement = "".join(rows[i:i + 1])
+        config = config[:start] + replacement + config[end:]
+    return config
 
 
 def rule_revision(config):
@@ -660,7 +675,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <input type="hidden" name="revision" value="{rule_revision(current)}">
 <label for="saved-domains">域名列表（每行一条）</label>
 <textarea id="saved-domains" name="domain" rows="12" spellcheck="false" placeholder="netflix.ca&#10;netflix.com">{domains}</textarea>
-<small>新增一行添加域名，改一行修改域名，删一行删除域名。保存会应用整个列表；自定义规则不受影响。</small>
+<small>每行填写一个域名或一条以 * 为转发目标的原版 SNIProxy 正则规则。支持批量粘贴、修改、删除；其他转发目标不受影响。</small>
 <button name="action" value="save_domains">保存域名列表</button></form></section>
 <section><h2>客户端 DNS 分流</h2>
 <form method="post" action="/">

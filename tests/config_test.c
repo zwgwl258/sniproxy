@@ -14,6 +14,17 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    struct Table *table;
+    SLIST_FOREACH(table, &config->tables, entries) {
+        struct Backend *backend;
+        STAILQ_FOREACH(backend, &table->backends, entries) {
+            if (!init_backend(backend)) {
+                free_config(config, EV_DEFAULT);
+                return 1;
+            }
+        }
+    }
+
     print_config(stdout, config);
 
     free_config(config, EV_DEFAULT);

@@ -145,6 +145,19 @@ with tempfile.TemporaryDirectory() as directory:
                 assert "配置已变化" in request(save)[1]
                 save.update(revision=panel.rule_revision(updated), domain="bad domain")
                 assert "整批未保存" in request(save)[1] and config.read_text(encoding="utf-8") == updated
+                special = r"^chatgpt-async-webps-prod-\S+-\d+\.webpubsub\.azure\.com$ *"
+                bulk = [f"example{i}.com" for i in range(322)]
+                bulk.insert(40, special)
+                save.update(revision=panel.rule_revision(updated), domain="\n".join(bulk))
+                response = request(save)[1]
+                assert "已保存并应用" in response and special in response
+                updated = config.read_text(encoding="utf-8")
+                rules = [rule for kind, _, _, rule, _ in panel.managed_rules(updated) if kind == "domain"]
+                assert len(rules) == 323 and rules[40] == special
+                assert panel.replace_domains(updated, panel.rule_revision(updated),
+                                             "\n".join(map(panel.domain_name, rules))) == updated
+                assert "^custom$ 127.0.0.1" in updated and "client 192.0.2.0/24" in updated
+
                 link = {"action": "adguard_url", "nonce": panel.NONCE,
                         "url": "https://dns.example.com:8443/"}
                 page = request(link)[1]
