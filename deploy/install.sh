@@ -76,7 +76,7 @@ fi
 if [[ ! -f $state/panel.env || -v PANEL_BIND || -v PANEL_PORT ]]; then
     printf 'PANEL_BIND=%s\nPANEL_PORT=%s\n' "$bind" "$port" > "$state/panel.env"
 fi
-install -m 0644 deploy/*.service /etc/systemd/system/
+install -m 0644 deploy/sniproxy-managed.service deploy/sniproxy-panel.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable sniproxy-panel.service
 systemctl restart sniproxy-panel.service
@@ -89,6 +89,9 @@ else
     if ! systemctl restart sniproxy-managed.service || ! (sleep 1; systemctl is-active --quiet sniproxy-managed.service); then
         echo "Proxy did not start; review its configuration in the panel." >&2
     fi
+fi
+if [[ ${INSTALL_ADGUARD_HOME:-1} != 0 ]]; then
+    bash deploy/install-adguard.sh
 fi
 # This file is generated above and readable only by root.
 . "$state/panel.env"

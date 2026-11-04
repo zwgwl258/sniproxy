@@ -17,7 +17,9 @@ jobs:
       - name: Install and verify the systemd services
         run: |
           sudo PANEL_BIND=127.0.0.1 PANEL_HOST=127.0.0.1 bash deploy/install.sh
-          sudo systemctl is-active sniproxy-managed.service sniproxy-panel.service
+          sudo systemctl is-active sniproxy-managed.service sniproxy-panel.service sniproxy-adguard.service
+          curl -fsS --noproxy '*' -o /dev/null http://127.0.0.1:3000/
+          sudo grep -Fx 'http://127.0.0.1:3000/' /etc/sniproxy-managed/adguard-url
           sudo mmdblookup --file /etc/sniproxy-managed/country.mmdb --ip 8.8.8.8 country iso_code
           password=$(sudo cat /etc/sniproxy-managed/panel-password)
           sudo curl --fail --silent --show-error --cacert /etc/sniproxy-managed/panel.crt \

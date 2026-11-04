@@ -1,0 +1,15 @@
+[Unit]
+Description=AdGuard Home (SNIProxy bundle)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+WorkingDirectory=/opt/sniproxy-adguard
+ExecStart=/opt/sniproxy-adguard/AdGuardHome --work-dir /opt/sniproxy-adguard --config /opt/sniproxy-adguard/AdGuardHome.yaml --web-addr 127.0.0.1:3000
+Restart=on-failure
+RestartSec=3
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
