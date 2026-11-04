@@ -436,10 +436,12 @@ def add_domain(config, value):
     return config[:pos] + rule + config[pos:]
 
 
-def add_client_dns(config, client, dns):
+def add_client_dns(config, client, dns, *, fallback=False):
     try:
         source = client.strip()
-        if re.fullmatch(r"[A-Za-z]{2}", source):
+        if fallback:
+            source = "fallback"
+        elif re.fullmatch(r"[A-Za-z]{2}", source):
             source = source.upper()
             if not (ROOT / "country.mmdb").is_file():
                 raise ValueError("missing-country-db")
@@ -534,7 +536,7 @@ def rule_forms(config):
     forms = []
     revision = rule_revision(config)
     for index, (kind, _, _, value, dns) in enumerate(managed_rules(config)):
-        if kind != "dns":
+        if kind != "dns" or value == "fallback":
             continue
         value = html.escape(value, quote=True)
         label = "域名" if kind == "domain" else "客户端 DNS"
@@ -585,6 +587,8 @@ class Panel(BaseHTTPRequestHandler):
     def page(self, message="", domain_input=None, rules_open=False):
         current = CONFIG.read_text(encoding="utf-8", errors="replace")
         rules = rule_forms(current)
+        fallback_dns = html.escape(next((dns for kind, _, _, source, dns in
+            reversed(list(managed_rules(current))) if kind == "dns" and source == "fallback"), ""), quote=True)
         domains = html.escape(domain_input if domain_input is not None else "\n".join(
             domain_name(value) for kind, _, _, value, _ in managed_rules(current) if kind == "domain"
         ))
@@ -636,7 +640,13 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <label for="dns">DNS 服务器 IP</label>
 <input id="dns" name="dns" placeholder="154.83.83.86, 149.28.158.78" required>
 <small>点击「选择国家／地区」，按中文名、英文名或两字母代码搜索后选择；也可直接输入 IP 或网段。按代理看到的 TCP 来源 IP 查询本地国家库。优先级：IP／网段 → 国家／地区 → 默认 DNS。 <a href="https://db-ip.com/" rel="noreferrer">IP Geolocation by DB-IP</a></small>
-<button name="action" value="client_dns">添加并应用</button></form></section>
+<button name="action" value="client_dns">添加并应用</button></form>
+<form method="post" action="/">
+<input type="hidden" name="nonce" value="{NONCE}">
+<label for="fallback-dns">全局兜底 DNS</label>
+<input id="fallback-dns" name="dns" value="{fallback_dns}" placeholder="1.1.1.1, 8.8.8.8">
+<small>客户端专用 DNS 未返回可用地址时才查询。最多 6 个 IP，逗号或空格分隔；清空后保存可关闭。</small>
+<button name="action" value="fallback_dns">保存兜底 DNS</button></form></section>
 <details id="saved-rules" {"open" if rules_open else ""}><summary>已添加客户端 DNS：修改或删除</summary>
 <label for="rule-search">搜索已添加的客户端 DNS</label>
 <div class="rule-toolbar">
@@ -683,6 +693,17 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
             if action == "apply":
                 data = form["config"][0].replace("\r\n", "\n").encode()
                 message = apply(data) if data.strip() else "配置不能为空。"
+            elif action == "fallback_dns":
+                config = CONFIG.read_text(encoding="utf-8")
+                dns = form["dns"][0].strip()
+                for kind, start, end, source, _ in reversed(list(managed_rules(config))):
+                    if kind == "dns" and source == "fallback":
+                        config = config[:start] + config[end:]
+                if re.search(r"(?m)^[ \t]*client[ \t]+fallback\b", config):
+                    raise ValueError("已有自定义兜底配置，请在高级配置中修改。")
+                if dns:
+                    config = add_client_dns(config, "", dns, fallback=True)
+                message = apply(config.encode())
             elif action == "save_domains":
                 config = CONFIG.read_text(encoding="utf-8")
                 updated = replace_domains(config, form["revision"][0], form["domain"][0])

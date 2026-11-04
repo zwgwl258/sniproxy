@@ -23,8 +23,11 @@ def serve_dns(sock, answer):
             question = b"\x05route\x04test\x00\x00\x01\x00\x01"
             if packet[12:12 + len(question)].lower() != question:
                 continue
-            response = packet[:2] + struct.pack("!5H", 0x8180, 1, 1, 0, 0)
+            response = packet[:2] + struct.pack("!5H", 0x8180 if answer else 0x8183, 1, int(bool(answer)), 0, 0)
             response += packet[12:12 + len(question)]
+            if answer is None:
+                sock.sendto(response, peer)
+                continue
             response += struct.pack("!3HIH", 0xC00C, 1, 1, 0, 4)
             sock.sendto(response + socket.inet_aton(answer), peer)
 
@@ -57,13 +60,17 @@ def main(binary):
         threading.Thread(target=serve_dns, args=(dns, backend.server_address[0]),
                          daemon=True).start()
 
+    failed_dns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    failed_dns.bind(("127.0.0.62", 53))
+    threading.Thread(target=serve_dns, args=(failed_dns, None), daemon=True).start()
+
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     country = ""
     cases = [("127.0.0.2", "127.0.0.11"),
              ("127.0.0.3", "127.0.0.10"),
-             ("127.0.0.9", "127.0.0.10")]
+             ("127.0.0.9", "127.0.0.10"), ("127.0.0.12", "127.0.0.11")]
     if os.environ.get("SNIPROXY_COUNTRY_DB"):
         country = """resolver {
     client GB
@@ -90,6 +97,17 @@ resolver {{
 }}
 resolver {{
     client 127.0.0.0/29
+    nameserver 127.0.0.60
+    mode ipv4_only
+}}
+resolver {{
+    client 127.0.0.12
+    nameserver 127.0.0.62
+    mode ipv4_only
+}}
+resolver {{
+    client fallback
+    nameserver 127.0.0.61
     nameserver 127.0.0.60
     mode ipv4_only
 }}
