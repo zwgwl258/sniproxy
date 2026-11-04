@@ -304,7 +304,6 @@ picker.addEventListener("toggle", () => {
     search.focus();
 });
 const ruleSearch = document.getElementById("rule-search");
-const ruleType = document.getElementById("rule-type-filter");
 const ruleRows = Array.from(document.querySelectorAll(".rule-row"));
 const previous = document.getElementById("rule-previous");
 const next = document.getElementById("rule-next");
@@ -314,7 +313,6 @@ let page = 0;
 function renderRules() {
     const query = ruleSearch.value.trim().toLowerCase();
     const matches = ruleRows.filter(row =>
-        (!ruleType.value || row.dataset.kind === ruleType.value) &&
         Array.from(row.querySelectorAll("input:not([type=hidden])")).some(input => {
             const value = input.value.toLowerCase();
             return value.includes(query) ||
@@ -332,7 +330,6 @@ function renderRules() {
 }
 
 ruleSearch.addEventListener("input", () => { page = 0; renderRules(); });
-ruleType.addEventListener("change", () => { page = 0; renderRules(); });
 previous.addEventListener("click", () => { page--; renderRules(); });
 next.addEventListener("click", () => { page++; renderRules(); });
 renderRules();
@@ -475,6 +472,36 @@ def managed_rules(config):
                 yield ("dns", block.start(), block.end(), rule[1], servers)
 
 
+def domain_name(rule):
+    return (rule.split()[0].removeprefix("^(.*[.])?").removeprefix(".*")
+            .removesuffix("$").replace(r"\.", ".").replace("[.]", "."))
+
+
+def replace_domains(config, revision, value):
+    if revision != rule_revision(config):
+        raise ValueError("配置已变化，请刷新页面再保存。")
+    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    # Validate the entire input before dropping any saved rules.
+    if lines:
+        add_domain("", value)
+    names = {line.rstrip(".").lower() for line in lines if not line.startswith(".*")}
+    explicit = {" ".join(line.split()) for line in lines if line.startswith(".*")}
+    retained = set()
+    for kind, start, end, rule, _ in reversed(list(managed_rules(config))):
+        if kind != "domain":
+            continue
+        name = domain_name(rule).lower()
+        if name in names or " ".join(rule.split()) in explicit:
+            retained.add(name)
+        else:
+            config = config[:start] + config[end:]
+    existing = {" ".join(line.split()) for line in config.splitlines()}
+    added = [line for line in lines if (
+        " ".join(line.split()) not in existing if line.startswith(".*")
+        else line.rstrip(".").lower() not in retained)]
+    return add_domain(config, "\n".join(added)) if added else config
+
+
 def rule_revision(config):
     return hashlib.sha256(config.encode()).hexdigest()
 
@@ -507,6 +534,8 @@ def rule_forms(config):
     forms = []
     revision = rule_revision(config)
     for index, (kind, _, _, value, dns) in enumerate(managed_rules(config)):
+        if kind != "dns":
+            continue
         value = html.escape(value, quote=True)
         label = "域名" if kind == "domain" else "客户端 DNS"
         dns_field = (f'<input name="dns" aria-label="DNS 服务器 IP" value="{html.escape(dns, quote=True)}" required>'
@@ -553,14 +582,11 @@ class Panel(BaseHTTPRequestHandler):
             return False
         return True
 
-    def page(self, message="", domain_input="", rules_open=False):
-        domain_input = html.escape(domain_input)
+    def page(self, message="", domain_input=None, rules_open=False):
         current = CONFIG.read_text(encoding="utf-8", errors="replace")
         rules = rule_forms(current)
-        domains = html.escape("\n".join(
-            value.split()[0].removeprefix("^(.*[.])?").removeprefix(".*")
-            .removesuffix("$").replace(r"\.", ".").replace("[.]", ".")
-            for kind, _, _, value, _ in managed_rules(current) if kind == "domain"
+        domains = html.escape(domain_input if domain_input is not None else "\n".join(
+            domain_name(value) for kind, _, _, value, _ in managed_rules(current) if kind == "domain"
         ))
         config = html.escape(current)
         message = html.escape(message)
@@ -573,7 +599,7 @@ textarea{{width:100%;min-height:25rem;box-sizing:border-box;font:14px monospace}
 section,details{{border:1px solid #ccd5df;border-radius:.6rem;padding:1rem;margin:1rem 0}}
 label{{display:block;margin:.55rem 0 .2rem}}
 input{{width:100%;max-width:34rem;padding:.5rem;box-sizing:border-box}}
-#domain,#saved-domains{{display:block;min-height:16rem;resize:vertical;padding:.65rem;line-height:1.5;white-space:pre;overflow:auto}}
+#saved-domains{{display:block;min-height:16rem;resize:vertical;padding:.65rem;line-height:1.5;white-space:pre;overflow:auto}}
 small{{display:block;margin:.25rem 0;color:#435264}}
 button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 .rule-row{{display:grid;grid-template-columns:5.5rem minmax(0,1fr) auto;align-items:center;gap:.65rem;padding:.5rem 0;border-bottom:1px solid #e4eaf0}}
@@ -585,20 +611,17 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 .rule-actions button[value=delete_rule]{{color:#a12626}}
 .rule-type{{color:#435264;font-size:.875rem}}
 .rule-toolbar{{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}}
-.rule-toolbar select{{padding:.5rem}}
 #rule-count{{color:#435264}}
 @media(max-width:640px){{.rule-row{{grid-template-columns:minmax(0,1fr) auto}}.rule-type{{grid-column:1/-1}}.rule-fields{{flex-wrap:wrap}}}}
 </style><h1>SNIProxy 管理</h1><p>代理状态：{status}</p><pre>{message}</pre>
 <section><h2>域名转发</h2>
-<label for="saved-domains">已添加域名（每行一条）</label>
-<textarea id="saved-domains" rows="12" readonly spellcheck="false" placeholder="暂无已添加域名">{domains}</textarea>
-<small>此处显示默认转发表中可由面板管理的全部域名，可滚动、全选和复制。修改或删除请到「已添加规则」。</small>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
-<label for="domain">添加域名</label>
-<textarea id="domain" name="domain" rows="12" wrap="off" placeholder="netflix.ca&#10;netflix.com" spellcheck="false" required>{domain_input}</textarea>
-<small>每行一个域名或一条现有的 .*netflix\\.ca$ * 格式规则，可混合粘贴。空行和重复规则会跳过；任何一行无效则整批不保存。命名转发表请用高级配置。</small>
-<button name="action" value="domain">添加并应用</button></form></section>
+<input type="hidden" name="revision" value="{rule_revision(current)}">
+<label for="saved-domains">域名列表（每行一条）</label>
+<textarea id="saved-domains" name="domain" rows="12" spellcheck="false" placeholder="netflix.ca&#10;netflix.com">{domains}</textarea>
+<small>新增一行添加域名，改一行修改域名，删一行删除域名。保存会应用整个列表；自定义规则不受影响。</small>
+<button name="action" value="save_domains">保存域名列表</button></form></section>
 <section><h2>客户端 DNS 分流</h2>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
@@ -614,13 +637,10 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <input id="dns" name="dns" placeholder="154.83.83.86, 149.28.158.78" required>
 <small>点击「选择国家／地区」，按中文名、英文名或两字母代码搜索后选择；也可直接输入 IP 或网段。按代理看到的 TCP 来源 IP 查询本地国家库。优先级：IP／网段 → 国家／地区 → 默认 DNS。 <a href="https://db-ip.com/" rel="noreferrer">IP Geolocation by DB-IP</a></small>
 <button name="action" value="client_dns">添加并应用</button></form></section>
-<details id="saved-rules" {"open" if rules_open else ""}><summary>已添加规则：修改或删除</summary>
-<label for="rule-search">搜索已添加规则</label>
+<details id="saved-rules" {"open" if rules_open else ""}><summary>已添加客户端 DNS：修改或删除</summary>
+<label for="rule-search">搜索已添加的客户端 DNS</label>
 <div class="rule-toolbar">
-<input id="rule-search" type="search" placeholder="搜索域名、来源或 DNS" autocomplete="off">
-<select id="rule-type-filter" aria-label="规则类型">
-<option value="">全部规则</option><option value="domain">仅域名</option><option value="dns">仅客户端 DNS</option>
-</select>
+<input id="rule-search" type="search" placeholder="搜索客户端来源或 DNS 地址" autocomplete="off">
 </div>
 <nav class="rule-toolbar" aria-label="规则分页">
 <button id="rule-previous" type="button">上一页</button>
@@ -663,6 +683,10 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
             if action == "apply":
                 data = form["config"][0].replace("\r\n", "\n").encode()
                 message = apply(data) if data.strip() else "配置不能为空。"
+            elif action == "save_domains":
+                config = CONFIG.read_text(encoding="utf-8")
+                updated = replace_domains(config, form["revision"][0], form["domain"][0])
+                message = apply(updated.encode()) if updated != config else "域名列表没有变化。"
             elif action in ("domain", "client_dns"):
                 config = CONFIG.read_text(encoding="utf-8")
                 if action == "domain":
@@ -690,7 +714,9 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
             message = str(error)
         except (OSError, subprocess.TimeoutExpired):
             message = "操作失败或超时，请检查代理状态和日志。"
-        self.page(message, form.get("domain", [""])[0] if action == "domain" else "",
+        draft = (form.get("domain", [""])[0] if action == "save_domains" and
+                 message not in ("配置已保存并应用。", "域名列表没有变化。") else None)
+        self.page(message, draft,
                   rules_open=action in ("edit_rule", "delete_rule"))
 
 

@@ -116,6 +116,24 @@ with tempfile.TemporaryDirectory() as directory:
                             rule=f"{panel.rule_revision(config.read_text())}:{dns_index}")
                 assert "已保存并应用" in request(edit)[1]
                 assert b"client JP" not in config.read_bytes()
+                original = config.read_text(encoding="utf-8")
+                original = original.replace("table {\n", "table {\n    ^custom$ 127.0.0.1\n")
+                config.write_text(original, encoding="utf-8")
+                save = {"action": "save_domains", "nonce": panel.NONCE,
+                        "revision": panel.rule_revision(original),
+                        "domain": "nflximg.net\nadded.example.org"}
+                response = request(save)[1]
+                assert "已保存并应用" in response
+                updated = config.read_text(encoding="utf-8")
+                assert r".*nflximg\.net$ *" in updated
+                assert "added[.]example[.]org$ *" in updated
+                assert "changed[.]example[.]com$ *" not in updated
+                assert "^custom$ 127.0.0.1" in updated and "client 192.0.2.0/24" in updated
+                assert 'data-kind="domain"' not in response
+                assert 'data-kind="dns"' in response
+                assert "配置已变化" in request(save)[1]
+                save.update(revision=panel.rule_revision(updated), domain="bad domain")
+                assert "整批未保存" in request(save)[1] and config.read_text(encoding="utf-8") == updated
         finally:
             server.shutdown()
             worker.join()
