@@ -349,6 +349,44 @@ def command(*args):
     return subprocess.run(args, capture_output=True, text=True, timeout=20)
 
 
+def dns_health_status():
+    try:
+        invocation = command("systemctl", "show", "-p", "InvocationID", "--value", SERVICE)
+        invocation_id = invocation.stdout.strip()
+        if invocation.returncode or not re.fullmatch(r"[0-9a-f]{32}", invocation_id) or not int(invocation_id, 16):
+            return "<p>DNS 探测状态：服务未运行或暂不可读。</p>"
+        result = command("journalctl", f"_SYSTEMD_INVOCATION_ID={invocation_id}",
+                         "--grep=^SNIPROXY_DNS_(HEALTH|PREFERRED) ", "-o", "cat", "-n", "2048", "--no-pager")
+    except (OSError, subprocess.TimeoutExpired):
+        return "<p>DNS 探测状态暂不可读。</p>"
+
+    readings = {}
+    preferred = ""
+    for line in result.stdout.splitlines():
+        health = re.fullmatch(r"SNIPROXY_DNS_HEALTH (\S+) (\S+) (-?\d{1,9})", line)
+        if health:
+            readings[health[1], health[2]] = int(health[3])
+        else:
+            selected = re.fullmatch(r"SNIPROXY_DNS_PREFERRED (\S+)", line)
+            if selected:
+                preferred = selected[1]
+    if not readings:
+        return "<p>DNS 探测状态：暂无结果（等待探测或日志不可读）。</p>"
+    delay = readings.get(("fallback", preferred))
+    if delay is not None and delay >= 0:
+        primary = f"{html.escape(preferred)}（{delay} ms）"
+    elif preferred == "-":
+        primary = "暂无通过探测的兜底 DNS（查询仍会尝试原兜底组）"
+    else:
+        primary = "暂无选中节点"
+    failed = [f"{html.escape(server)}（{html.escape(source if source != 'fallback' else '兜底')}）"
+              for (source, server), latency in readings.items() if latency < 0]
+    return (f"<p><strong>当前首选兜底 DNS：</strong>{primary}</p>"
+            f"<p><strong>不可用 DNS：</strong>{'、'.join(failed) or '已探测节点中无故障'}</p>"
+            "<small>每 5 分钟复测，刷新页面查看最近结果。</small>")
+
+
+
 def atomic_write(path, data):
     with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as temp:
         tmp = Path(temp.name)
@@ -704,6 +742,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 </nav>{rules}</div>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
+<div id="dns-health">{dns_health_status()}</div>
 <label for="fallback-dns">全局兜底 DNS</label>
 <input id="fallback-dns" name="dns" value="{fallback_dns}" placeholder="1.1.1.1, 8.8.8.8">
 <small>未命中 IP／网段或国家规则时直接使用；客户端专用 DNS 未返回可用地址时也会尝试。最多 6 个 IP，逗号或空格分隔；清空后保存可关闭。</small>

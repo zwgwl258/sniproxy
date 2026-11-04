@@ -285,16 +285,26 @@ open_resolver(struct Resolver *resolver, struct ev_loop *loop,
 
 struct DnsProbe {
     struct Resolver endpoint;
+    char server[INET6_ADDRSTRLEN];
+    char source[64];
     struct dns_query *query;
     ev_tstamp started;
     double latency; /* 0: unknown, negative: failed */
     struct DnsProbe *next;
 };
 
+static const struct DnsProbe *best_fallback_probe(void);
+
 static void
 probe_answer(struct DnsProbe *probe, int usable) {
     probe->query = NULL;
     probe->latency = usable ? ev_time() - probe->started + 0.000001 : -1;
+    fprintf(stderr, "SNIPROXY_DNS_HEALTH %s %s %d\n",
+            probe->source, probe->server, usable ? (int)(probe->latency * 1000) : -1);
+    if (strcmp(probe->source, "fallback") == 0) {
+        const struct DnsProbe *best = best_fallback_probe();
+        fprintf(stderr, "SNIPROXY_DNS_PREFERRED %s\n", best ? best->server : "-");
+    }
 }
 
 static void
@@ -324,12 +334,12 @@ probe_tick(struct ev_loop *loop, ev_timer *timer, int events) {
             ? dns_submit_a6(p->endpoint.ctx, "example.com.", 0, probe_a6, p)
             : dns_submit_a4(p->endpoint.ctx, "example.com.", 0, probe_a4, p);
         if (p->query == NULL)
-            p->latency = -1;
+            probe_answer(p, 0);
     }
 }
 
 static void
-start_probes(struct Resolver *resolver, char **nameservers) {
+start_probes(struct Resolver *resolver, const char *source, char **nameservers) {
     if (nameservers == NULL)
         return;
     struct DnsProbe **tail = &resolver->probes;
@@ -342,6 +352,8 @@ start_probes(struct Resolver *resolver, char **nameservers) {
             free(p);
             break;
         }
+        snprintf(p->server, sizeof(p->server), "%s", nameservers[i]);
+        snprintf(p->source, sizeof(p->source), "%s", source);
         char *server[] = {nameservers[i], NULL};
         open_resolver(&p->endpoint, resolver->loop, server, NULL, resolver->mode, 1);
         *tail = p;
@@ -364,12 +376,18 @@ resolver_unhealthy(const struct Resolver *resolver) {
     return 1;
 }
 
-static struct dns_ctx *
-preferred_fallback(void) {
+static const struct DnsProbe *
+best_fallback_probe(void) {
     const struct DnsProbe *best = NULL;
     for (const struct DnsProbe *p = fallback_resolver->probes; p != NULL; p = p->next)
         if (p->latency > 0 && (best == NULL || p->latency < best->latency))
             best = p;
+    return best;
+}
+
+static struct dns_ctx *
+preferred_fallback(void) {
+    const struct DnsProbe *best = best_fallback_probe();
     return best != NULL ? best->endpoint.ctx : fallback_resolver->ctx;
 }
 
@@ -397,7 +415,7 @@ resolv_add_client(struct ev_loop *loop, const char *cidr, char **nameservers,
         return -1;
     }
     open_resolver(resolver, loop, nameservers, search, mode, 0);
-    start_probes(resolver, nameservers);
+    start_probes(resolver, cidr, nameservers);
     if (is_fallback)
         fallback_resolver = resolver;
     resolver->next = client_resolvers;
