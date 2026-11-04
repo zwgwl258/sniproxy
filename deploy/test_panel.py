@@ -82,7 +82,7 @@ with tempfile.TemporaryDirectory() as directory:
                 assert b"new[.]example[.]com$ *" in config.read_bytes()
                 dns = {"action": "client_dns", "nonce": panel.NONCE,
                        "client": "192.0.2.3/24", "dns": "1.1.1.1"}
-                assert "请输入有效" in request(dns)[1]
+                assert "请输入两字母国家/地区代码" in request(dns)[1]
                 dns.update(client="192.0.2.0/24", dns="1.1.1.1, 9.9.9.9")
                 assert "已保存并应用" in request(dns)[1]
                 assert b"client 192.0.2.0/24" in config.read_bytes()
