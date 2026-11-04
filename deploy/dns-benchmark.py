@@ -76,7 +76,7 @@ def measure(server, domains):
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
-        table = "".join("    ^" + domain.replace(".", "[.]") + "$ *\n" for domain in domains)
+        table = "".join("    ^" + domain.replace(".", "[.]") + "$ *:443\n" for domain in domains)
         config.write_text(f"resolver {{\n    nameserver {server}\n    mode ipv4_only\n}}\n"
                           f"listener 127.0.0.1:{port} {{\n    proto tls\n}}\n"
                           f"table {{\n{table}}}\n", encoding="ascii")
