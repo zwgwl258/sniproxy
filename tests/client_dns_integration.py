@@ -12,17 +12,22 @@ import threading
 import time
 
 
-def serve_dns(sock, answer):
+def serve_dns(sock, answer, delay=0, requests=None):
     with sock:
         while True:
             try:
                 packet, peer = sock.recvfrom(4096)
             except OSError:
                 return
-            # The test sends one ordinary A question for route.test.
-            question = b"\x05route\x04test\x00\x00\x01\x00\x01"
-            if packet[12:12 + len(question)].lower() != question:
+            route = b"\x05route\x04test\x00\x00\x01\x00\x01"
+            health = b"\x07example\x03com\x00\x00\x01\x00\x01"
+            question = next((q for q in (route, health) if packet[12:12 + len(q)].lower() == q), None)
+            if question is None:
                 continue
+            if requests is not None and question == route:
+                requests.append(question)
+            if delay:
+                time.sleep(delay)
             response = packet[:2] + struct.pack("!5H", 0x8180 if answer else 0x8183, 1, int(bool(answer)), 0, 0)
             response += packet[12:12 + len(question)]
             if answer is None:
@@ -57,12 +62,13 @@ def main(binary):
         threading.Thread(target=backend.serve_forever, daemon=True).start()
         dns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         dns.bind((dns_ip, 53))
-        threading.Thread(target=serve_dns, args=(dns, backend.server_address[0]),
+        threading.Thread(target=serve_dns, args=(dns, backend.server_address[0], 0.03 if dns_ip.endswith(".60") else 0),
                          daemon=True).start()
 
     failed_dns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     failed_dns.bind(("127.0.0.62", 53))
-    threading.Thread(target=serve_dns, args=(failed_dns, None), daemon=True).start()
+    failed_requests = []
+    threading.Thread(target=serve_dns, args=(failed_dns, None, 0, failed_requests), daemon=True).start()
 
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -107,8 +113,8 @@ resolver {{
 }}
 resolver {{
     client fallback
-    nameserver 127.0.0.61
     nameserver 127.0.0.60
+    nameserver 127.0.0.61
     mode ipv4_only
 }}
 {country}listener 127.0.0.1:{port} {{
@@ -131,12 +137,14 @@ table {{
             else:
                 raise RuntimeError("SNIProxy did not start listening")
 
+            time.sleep(0.5)  # Allow startup health probes to finish.
             cases *= 4
             with ThreadPoolExecutor(max_workers=6) as pool:
                 actual = list(pool.map(lambda case: request(port, case[0]), cases))
             expected = [case[1] for case in cases]
             if actual != expected:
                 raise AssertionError(f"Expected {expected}, got {actual}")
+            assert not failed_requests, "Unhealthy client DNS received a live query"
             print("Client DNS routing passed")
         finally:
             proxy.terminate()

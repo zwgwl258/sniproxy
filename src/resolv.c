@@ -152,6 +152,7 @@ resolv_cancel(struct ResolvQuery *query_handle) {
 struct ResolvQuery {
     struct dns_ctx *ctx;
     char *fallback_hostname;
+    struct dns_ctx *fallback_next;
     void (*client_cb)(struct Address *, void *);
     void (*client_free_cb)(void *);
     void *client_cb_data;
@@ -168,6 +169,8 @@ struct Resolver {
     ev_io io;
     ev_timer timer;
     struct Resolver *next;
+    struct DnsProbe *probes;
+    ev_timer probe_timer;
     unsigned char network[16];
     char country[2];
     int family;
@@ -233,7 +236,7 @@ static struct Address *choose_any(struct ResolvQuery *);
 
 static int
 open_resolver(struct Resolver *resolver, struct ev_loop *loop,
-        char **nameservers, char **search, int mode) {
+        char **nameservers, char **search, int mode, int fast) {
     struct dns_ctx *ctx = resolver->ctx;
     resolver->loop = loop;
     resolver->mode = mode;
@@ -250,6 +253,11 @@ open_resolver(struct Resolver *resolver, struct ev_loop *loop,
         if (search != NULL)
             for (int i = 0; search[i] != NULL; i++)
                 dns_add_srch(ctx, search[i]);
+    }
+
+    if (fast) {
+        dns_set_opt(ctx, DNS_OPT_TIMEOUT, 2);
+        dns_set_opt(ctx, DNS_OPT_NTRIES, 1);
     }
 
     int sockfd = dns_open(ctx);
@@ -274,10 +282,102 @@ open_resolver(struct Resolver *resolver, struct ev_loop *loop,
     return sockfd;
 }
 
+
+struct DnsProbe {
+    struct Resolver endpoint;
+    struct dns_query *query;
+    ev_tstamp started;
+    double latency; /* 0: unknown, negative: failed */
+    struct DnsProbe *next;
+};
+
+static void
+probe_answer(struct DnsProbe *probe, int usable) {
+    probe->query = NULL;
+    probe->latency = usable ? ev_time() - probe->started + 0.000001 : -1;
+}
+
+static void
+probe_a4(struct dns_ctx *ctx, struct dns_rr_a4 *answer, void *data) {
+    (void)ctx;
+    probe_answer(data, answer != NULL && answer->dnsa4_nrr > 0);
+    free(answer);
+}
+
+static void
+probe_a6(struct dns_ctx *ctx, struct dns_rr_a6 *answer, void *data) {
+    (void)ctx;
+    probe_answer(data, answer != NULL && answer->dnsa6_nrr > 0);
+    free(answer);
+}
+
+static void
+probe_tick(struct ev_loop *loop, ev_timer *timer, int events) {
+    (void)loop;
+    (void)events;
+    struct Resolver *resolver = timer->data;
+    for (struct DnsProbe *p = resolver->probes; p != NULL; p = p->next) {
+        if (p->query != NULL)
+            continue;
+        p->started = ev_time();
+        p->query = resolver->mode == RESOLV_MODE_IPV6_ONLY
+            ? dns_submit_a6(p->endpoint.ctx, "example.com.", 0, probe_a6, p)
+            : dns_submit_a4(p->endpoint.ctx, "example.com.", 0, probe_a4, p);
+        if (p->query == NULL)
+            p->latency = -1;
+    }
+}
+
+static void
+start_probes(struct Resolver *resolver, char **nameservers) {
+    if (nameservers == NULL)
+        return;
+    struct DnsProbe **tail = &resolver->probes;
+    for (size_t i = 0; nameservers[i] != NULL; i++) {
+        struct DnsProbe *p = calloc(1, sizeof(*p));
+        if (p == NULL)
+            break;
+        p->endpoint.ctx = dns_new(NULL);
+        if (p->endpoint.ctx == NULL) {
+            free(p);
+            break;
+        }
+        char *server[] = {nameservers[i], NULL};
+        open_resolver(&p->endpoint, resolver->loop, server, NULL, resolver->mode, 1);
+        *tail = p;
+        tail = &p->next;
+    }
+    if (resolver->probes == NULL)
+        return;
+    ev_timer_init(&resolver->probe_timer, probe_tick, 0., 300.);
+    resolver->probe_timer.data = resolver;
+    ev_timer_start(resolver->loop, &resolver->probe_timer);
+}
+
+static int
+resolver_unhealthy(const struct Resolver *resolver) {
+    if (resolver->probes == NULL)
+        return 0;
+    for (const struct DnsProbe *p = resolver->probes; p != NULL; p = p->next)
+        if (p->latency >= 0)
+            return 0;
+    return 1;
+}
+
+static struct dns_ctx *
+preferred_fallback(void) {
+    const struct DnsProbe *best = NULL;
+    for (const struct DnsProbe *p = fallback_resolver->probes; p != NULL; p = p->next)
+        if (p->latency > 0 && (best == NULL || p->latency < best->latency))
+            best = p;
+    return best != NULL ? best->endpoint.ctx : fallback_resolver->ctx;
+}
+
+
 int
 resolv_init(struct ev_loop *loop, char **nameservers, char **search, int mode) {
     default_resolver.ctx = &dns_defctx;
-    return open_resolver(&default_resolver, loop, nameservers, search, mode);
+    return open_resolver(&default_resolver, loop, nameservers, search, mode, 0);
 }
 
 int
@@ -296,7 +396,8 @@ resolv_add_client(struct ev_loop *loop, const char *cidr, char **nameservers,
         free(resolver);
         return -1;
     }
-    open_resolver(resolver, loop, nameservers, search, mode);
+    open_resolver(resolver, loop, nameservers, search, mode, 0);
+    start_probes(resolver, nameservers);
     if (is_fallback)
         fallback_resolver = resolver;
     resolver->next = client_resolvers;
@@ -316,6 +417,15 @@ resolv_shutdown(struct ev_loop *loop) {
     while (client_resolvers != NULL) {
         struct Resolver *resolver = client_resolvers;
         client_resolvers = resolver->next;
+        if (resolver->probes != NULL)
+            ev_timer_stop(loop, &resolver->probe_timer);
+        while (resolver->probes != NULL) {
+            struct DnsProbe *p = resolver->probes;
+            resolver->probes = p->next;
+            close_resolver(&p->endpoint, loop);
+            dns_free(p->endpoint.ctx);
+            free(p);
+        }
         close_resolver(resolver, loop);
         dns_free(resolver->ctx);
         free(resolver);
@@ -369,9 +479,11 @@ resolv_query_client(const char *hostname, int mode, const struct sockaddr_storag
         void (*client_cb)(struct Address *, void *),
         void (*client_free_cb)(void *), void *client_cb_data) {
     struct Resolver *resolver = select_resolver(peer);
-    if (resolver == &default_resolver && fallback_resolver != NULL)
+    if (fallback_resolver != NULL &&
+            (resolver == &default_resolver || resolver_unhealthy(resolver)))
         resolver = fallback_resolver;
-    struct dns_ctx *ctx = resolver->ctx;
+    struct dns_ctx *ctx = resolver == fallback_resolver
+        ? preferred_fallback() : resolver->ctx;
 
     /*
      * Wrap udns's call back in our own
@@ -382,8 +494,10 @@ resolv_query_client(const char *hostname, int mode, const struct sockaddr_storag
         return NULL;
     }
     cb_data->ctx = ctx;
-    cb_data->fallback_hostname = (fallback_resolver != NULL && resolver != fallback_resolver)
-        ? strdup(hostname) : NULL;
+    cb_data->fallback_next = fallback_resolver == NULL ? NULL :
+        resolver != fallback_resolver ? preferred_fallback() :
+        ctx != fallback_resolver->ctx ? fallback_resolver->ctx : NULL;
+    cb_data->fallback_hostname = cb_data->fallback_next != NULL ? strdup(hostname) : NULL;
     cb_data->client_cb = client_cb;
     cb_data->client_free_cb = client_free_cb;
     cb_data->client_cb_data = client_cb_data;
@@ -434,10 +548,16 @@ retry_fallback(struct ResolvQuery *query) {
     char *hostname = query->fallback_hostname;
     if (hostname == NULL)
         return;
-    query->fallback_hostname = NULL;
-    query->ctx = fallback_resolver->ctx;
-    submit_queries(query, hostname);
-    free(hostname);
+    do {
+        query->ctx = query->fallback_next;
+        query->fallback_next = query->ctx == fallback_resolver->ctx
+            ? NULL : fallback_resolver->ctx;
+        submit_queries(query, hostname);
+    } while (all_queries_are_null(query) && query->fallback_next != NULL);
+    if (query->fallback_next == NULL) {
+        query->fallback_hostname = NULL;
+        free(hostname);
+    }
 }
 
 void
