@@ -46,7 +46,7 @@ f=$(mktemp) && curl -fLsS 'https://raw.githubusercontent.com/zwgwl258/sniproxy/f
 | 组件 | 全新安装默认值 |
 | --- | --- |
 | SNIProxy HTTPS 管理面板 | TCP `9443` |
-| SNIProxy 流量监听 | 本机 `127.0.0.1:8080`（HTTP）和 `127.0.0.1:8443`（TLS） |
+| SNIProxy 流量监听 | 新安装默认 `0.0.0.0:80`（HTTP）和 `0.0.0.0:443`（TLS）；防火墙仅放行可信客户端 |
 | AdGuard Home Web 后台 | 本机 `127.0.0.1:3000`，由面板转发 |
 | AdGuard Home DNS | 新安装默认监听服务器网卡 IPv4 的 TCP/UDP 53；防火墙仅放行可信客户端 |
 
