@@ -22,6 +22,7 @@ SERVICE = "sniproxy-managed.service"
 CHECKER = "/usr/local/lib/sniproxy-managed/config-test"
 MAX_BODY = 1024 * 1024
 NONCE = secrets.token_urlsafe(32)
+FORM_RESULTS = {}
 
 # ISO 3166-1 alpha-2 codes with Chinese and English search labels.
 COUNTRIES = """AD|安道尔|Andorra
@@ -579,7 +580,8 @@ class Panel(BaseHTTPRequestHandler):
             self.reply(401, "需要管理员账号和密码。",
                        WWW_Authenticate='Basic realm="SNIProxy", charset="UTF-8"')
             return False
-        if self.path != "/":
+        if self.path != "/" and not (self.command == "GET" and
+                re.fullmatch(r"/\?result=[A-Za-z0-9_-]{22}", self.path)):
             self.reply(404)
             return False
         return True
@@ -673,9 +675,17 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <button name="action" value="logs">查看最近日志</button>
 </form><script>{COUNTRY_SCRIPT}</script></html>""")
 
+    def form_result(self, message, draft=None):
+        token = secrets.token_urlsafe(16)
+        if len(FORM_RESULTS) >= 16:
+            FORM_RESULTS.pop(next(iter(FORM_RESULTS)))
+        FORM_RESULTS[token] = (message, draft)
+        self.reply(303, Location=f"/?result={token}")
+
     def do_GET(self):
         if self.authorized():
-            self.page()
+            token = self.path.partition("?result=")[2]
+            self.page(*FORM_RESULTS.pop(token, ("", None)))
 
     def do_POST(self):
         if not self.authorized():
@@ -689,7 +699,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
         except (UnicodeError, ValueError):
             return self.reply(400)
         if not hmac.compare_digest(form.get("nonce", [""])[0].encode(), NONCE.encode()):
-            return self.reply(403)
+            return self.form_result("页面已过期，本次操作未执行。请重新操作。")
         action = form.get("action", [""])[0]
         try:
             if action == "apply":
@@ -739,7 +749,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
             message = "操作失败或超时，请检查代理状态和日志。"
         draft = (form.get("domain", [""])[0] if action == "save_domains" and
                  message not in ("配置已保存并应用。", "域名列表没有变化。") else None)
-        self.page(message, draft)
+        self.form_result(message, draft)
 
 
 class Server(HTTPServer):

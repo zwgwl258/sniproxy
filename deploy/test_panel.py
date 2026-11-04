@@ -37,7 +37,18 @@ with tempfile.TemporaryDirectory() as directory:
                 conn.request("GET" if form is None else "POST", "/",
                              urlencode(form) if form is not None else None, headers)
                 response = conn.getresponse()
-                return response.status, response.read().decode()
+                body = response.read().decode()
+                if form is not None:
+                    assert response.status == 303
+                    location = response.getheader("Location")
+                    conn.request("GET", location, headers=headers)
+                    response = conn.getresponse()
+                    body = response.read().decode()
+                    conn.request("GET", location, headers=headers)
+                    refreshed = conn.getresponse()
+                    assert refreshed.status == 200
+                    refreshed.read()
+                return response.status, body
             finally:
                 conn.close()
 
@@ -50,7 +61,7 @@ with tempfile.TemporaryDirectory() as directory:
                 assert request(auth=False)[0] == 401
                 assert "old" in request()[1]
                 form = {"action": "apply", "nonce": "wrong", "config": "new"}
-                assert request(form)[0] == 403 and config.read_bytes() == b"old"
+                assert "本次操作未执行" in request(form)[1] and config.read_bytes() == b"old"
                 form["nonce"] = panel.NONCE
                 command.return_value = bad
                 assert "校验失败" in request(form)[1] and config.read_bytes() == b"old"
