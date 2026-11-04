@@ -170,3 +170,7 @@ spoofing by a single 16 bit query ID, which makes it relatively easy to spoof).
 ## Client-aware backend DNS
 
 See [Client DNS routing](CLIENT-DNS.md) for per-client IP/CIDR configuration.
+
+## HTTPS administration panel
+
+See [one-command deployment and web management](deploy/README.md).

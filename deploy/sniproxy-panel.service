@@ -1,0 +1,14 @@
+[Unit]
+Description=SNIProxy HTTPS administration panel
+After=network.target
+
+[Service]
+Type=exec
+EnvironmentFile=/etc/sniproxy-managed/panel.env
+ExecStart=/usr/bin/python3 /usr/local/lib/sniproxy-managed/panel.py
+Restart=on-failure
+RestartSec=3
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

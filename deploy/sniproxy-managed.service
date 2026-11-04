@@ -1,0 +1,10 @@
+[Unit]
+Description=SNIProxy with client DNS routing
+After=network.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/lib/sniproxy-managed/sniproxy -f -c /etc/sniproxy-managed/sniproxy.conf
+
+[Install]
+WantedBy=multi-user.target
