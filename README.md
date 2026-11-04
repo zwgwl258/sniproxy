@@ -48,7 +48,7 @@ f=$(mktemp) && curl -fLsS 'https://raw.githubusercontent.com/zwgwl258/sniproxy/f
 | SNIProxy HTTPS 管理面板 | TCP `9443` |
 | SNIProxy 流量监听 | 本机 `127.0.0.1:8080`（HTTP）和 `127.0.0.1:8443`（TLS） |
 | AdGuard Home Web 后台 | 本机 `127.0.0.1:3000`，由面板转发 |
-| AdGuard Home DNS | 本机 `127.0.0.1:5353` |
+| AdGuard Home DNS | 新安装默认监听服务器网卡 IPv4 的 TCP/UDP 53；防火墙仅放行可信客户端 |
 
 远端客户端如果要连接代理，请先在「高级配置」中设置实际监听地址和转发表，再按需放行端口。不要开放公网 AdGuard Home 后台或把 DNS 暴露为公共解析器。
 

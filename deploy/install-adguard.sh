@@ -33,7 +33,39 @@ fi
 config=$dir/AdGuardHome.yaml
 marker=/etc/sniproxy-managed/adguard-integrated
 if [[ ! -e $config ]]; then
-    cat > "$config.tmp" <<'YAML'
+    bind_ip=${ADGUARD_BIND_IP:-}
+    if [[ -z $bind_ip ]]; then
+        bind_ip=$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<NF;i++) if($i=="src") {print $(i+1); exit}}')
+    fi
+    python3 - "$bind_ip" <<'PYTHON'
+import ipaddress
+import sys
+
+try:
+    addr = ipaddress.IPv4Address(sys.argv[1])
+    if addr.is_unspecified or addr.is_multicast:
+        raise ValueError
+except ValueError:
+    sys.exit("Set ADGUARD_BIND_IP to a local interface IPv4 address.")
+PYTHON
+    if ! ip -o -4 addr show | awk '{split($4,a,"/"); print a[1]}' | grep -Fx -- "$bind_ip" >/dev/null; then
+        echo "ADGUARD_BIND_IP is not assigned to a local interface: $bind_ip" >&2
+        exit 1
+    fi
+    if ! python3 - "$bind_ip" <<'PYTHON'
+import socket
+import sys
+
+for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+    with socket.socket(socket.AF_INET, kind) as sock:
+        sock.bind((sys.argv[1], 53))
+PYTHON
+    then
+        echo "Cannot bind DNS to $bind_ip:53; check TCP/UDP port conflicts." >&2
+        exit 1
+    fi
+    echo "AdGuard Home DNS: $bind_ip:53. Restrict TCP/UDP 53 to trusted clients in your firewall."
+    cat > "$config.tmp" <<YAML
 schema_version: 34
 users: []
 filters:
@@ -49,8 +81,8 @@ http:
   address: 127.0.0.1:3000
 dns:
   bind_hosts:
-    - 127.0.0.1
-  port: 5353
+    - $bind_ip
+  port: 53
 YAML
     mv -- "$config.tmp" "$config"
     touch "$marker"

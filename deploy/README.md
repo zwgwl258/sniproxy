@@ -62,7 +62,7 @@ IP／CIDR 优先于国家；未识别或没有规则的来源用默认 DNS。
 一键安装默认包含 AdGuard Home（Debian/Ubuntu amd64、arm64）。
 上游 v0.107.80 源码与许可证保存在 `vendor/adguardhome/`；安装器使用同版本官方二进制并校验 SHA-256，无需在服务器安装 Go 或 Node.js。
 新安装会自动初始化，不显示安装向导。登录 SNIProxy 后，点击「AdGuard Home 管理」即可打开同一 HTTPS 入口下的后台，无需另设密码或使用 SSH 隧道。
-集成服务的 Web 后台仅监听 127.0.0.1:3000；DNS 默认仅监听 127.0.0.1:5353，不替换已有 DNS 规则。
+集成服务的 Web 后台仅监听 127.0.0.1:3000；新安装的 DNS 默认监听出站路由选中的本机 IPv4 的 TCP/UDP 53，可用 ADGUARD_BIND_IP 指定其他本机 IPv4。防火墙应仅允许可信客户端访问。升级保留已有 AdGuard Home 配置，不替换已有 DNS 规则。
 只将面板开放给可信管理员，并限制服务器本地登录权限：本地进程能访问回环后台。
 已完成独立初始化的 AdGuard Home 保留配置与认证，不会被迁移或重置。
 设置 INSTALL_ADGUARD_HOME=0 可跳过安装。
