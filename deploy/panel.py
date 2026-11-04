@@ -13,7 +13,7 @@ import ssl
 import subprocess
 import tempfile
 import time
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path("/etc/sniproxy-managed")
 CONFIG = ROOT / "sniproxy.conf"
@@ -587,6 +587,9 @@ class Panel(BaseHTTPRequestHandler):
         return True
 
     def page(self, message="", domain_input=None):
+        address_file = ROOT / "adguard-url"
+        adguard_url = html.escape(address_file.read_text(encoding="utf-8").strip(), quote=True) if address_file.is_file() else ""
+        adguard_link = adguard_url or "#adguard-url"
         current = CONFIG.read_text(encoding="utf-8", errors="replace")
         rules = rule_forms(current)
         fallback_dns = html.escape(next((dns for kind, _, _, source, dns in
@@ -621,7 +624,11 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 #saved-rules h3{{margin:0 0 .5rem}}
 #rule-count{{color:#435264}}
 @media(max-width:640px){{.rule-row{{grid-template-columns:minmax(0,1fr) auto}}.rule-type{{grid-column:1/-1}}.rule-fields{{flex-wrap:wrap}}}}
-</style><h1>SNIProxy 管理</h1><p>代理状态：{status}</p><pre>{message}</pre>
+.panel-header{{display:flex;align-items:center;gap:1.25rem;flex-wrap:wrap}}
+.panel-header a{{padding:.55rem .8rem;border:1px solid #a5b8cc;border-radius:.45rem;color:#194b79;text-decoration:none}}
+.panel-header a:hover{{background:#edf5ff}}
+</style><header class="panel-header"><h1>SNIProxy 管理</h1>
+<a href="{adguard_link}" {'target="_blank" rel="noopener noreferrer"' if adguard_url else ""}>AdGuard Home 管理</a></header><p>代理状态：{status}</p><pre>{message}</pre>
 <section><h2>域名转发</h2>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
@@ -661,6 +668,14 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <input id="fallback-dns" name="dns" value="{fallback_dns}" placeholder="1.1.1.1, 8.8.8.8">
 <small>客户端专用 DNS 未返回可用地址时才查询。最多 6 个 IP，逗号或空格分隔；清空后保存可关闭。</small>
 <button name="action" value="fallback_dns">保存兜底 DNS</button></form></section>
+<details><summary>AdGuard Home 后台地址设置</summary>
+<form method="post" action="/">
+<input type="hidden" name="nonce" value="{NONCE}">
+<label for="adguard-url">AdGuard Home 管理地址</label>
+<input id="adguard-url" name="url" type="url" value="{adguard_url}" placeholder="https://dns.example.com/">
+<button name="action" value="adguard_url">保存后台地址</button>
+<small>填写浏览器能访问的完整后台地址。留空保存会清除入口地址。</small>
+</form></details>
 <details><summary>高级配置：查看、编辑或删除规则</summary>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
@@ -716,6 +731,17 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
                 if dns:
                     config = add_client_dns(config, "", dns, fallback=True)
                 message = apply(config.encode())
+            elif action == "adguard_url":
+                url = form["url"][0].strip()
+                if url:
+                    parsed = urlsplit(url)
+                    if (len(url) > 2048 or parsed.scheme not in ("http", "https") or
+                            not parsed.hostname or parsed.username is not None or
+                            parsed.password is not None or parsed.port == 0 or
+                            any(char.isspace() or ord(char) < 32 or char == chr(92) for char in url)):
+                        raise ValueError("请填写有效的 HTTP 或 HTTPS 后台地址，不要包含账号或密码。")
+                atomic_write(ROOT / "adguard-url", (url + "\n").encode())
+                message = "AdGuard Home 后台地址已保存。" if url else "已清除 AdGuard Home 后台地址。"
             elif action == "save_domains":
                 config = CONFIG.read_text(encoding="utf-8")
                 updated = replace_domains(config, form["revision"][0], form["domain"][0])

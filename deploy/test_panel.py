@@ -145,6 +145,15 @@ with tempfile.TemporaryDirectory() as directory:
                 assert "配置已变化" in request(save)[1]
                 save.update(revision=panel.rule_revision(updated), domain="bad domain")
                 assert "整批未保存" in request(save)[1] and config.read_text(encoding="utf-8") == updated
+                link = {"action": "adguard_url", "nonce": panel.NONCE,
+                        "url": "https://dns.example.com:8443/"}
+                page = request(link)[1]
+                assert 'href="https://dns.example.com:8443/" target="_blank"' in page
+                link["url"] = "javascript:alert(1)"
+                assert "请填写有效" in request(link)[1]
+                assert 'href="https://dns.example.com:8443/"' in request()[1]
+                link["url"] = ""
+                assert 'href="#adguard-url"' in request(link)[1]
         finally:
             server.shutdown()
             worker.join()
