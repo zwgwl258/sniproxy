@@ -302,7 +302,26 @@ picker.addEventListener("toggle", () => {
     results.replaceChildren(...countries);
     results.selectedIndex = -1;
     search.focus();
-});"""
+});
+const ruleSearch = document.getElementById("rule-search");
+const ruleRows = Array.from(document.querySelectorAll(".rule-row"));
+ruleSearch.addEventListener("input", () => {
+    const query = ruleSearch.value.trim().toLowerCase();
+    let count = 0;
+    for (const row of ruleRows) {
+        row.hidden = !Array.from(row.querySelectorAll("input:not([type=hidden])"))
+            .some(input => input.value.toLowerCase().includes(query));
+        if (!row.hidden) count++;
+    }
+    document.getElementById("rule-count").textContent = `${count} / ${ruleRows.length}`;
+});
+for (const row of ruleRows) {
+    row.addEventListener("submit", event => {
+        if (event.submitter?.value === "delete_rule" && !window.confirm("确定删除这条规则？")) {
+            event.preventDefault();
+        }
+    });
+}"""
 COUNTRY_SCRIPT_HASH = base64.b64encode(hashlib.sha256(COUNTRY_SCRIPT.encode()).digest()).decode()
 
 
@@ -471,12 +490,13 @@ def rule_forms(config):
         label = "域名" if kind == "domain" else "客户端 DNS"
         dns_field = (f'<input name="dns" aria-label="DNS 服务器 IP" value="{html.escape(dns, quote=True)}" required>'
                      if kind == "dns" else "")
-        forms.append(f"""<form method="post" action="/">
+        forms.append(f"""<form class="rule-row" method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
 <input type="hidden" name="rule" value="{revision}:{index}">
-<label>{label}<input name="value" value="{value}" required></label>{dns_field}
-<button name="action" value="edit_rule">保存修改</button>
-<button name="action" value="delete_rule" formnovalidate>删除规则</button>
+<span class="rule-type">{label}</span>
+<div class="rule-fields"><input name="value" aria-label="{label}规则" value="{value}" required>{dns_field}</div>
+<div class="rule-actions"><button name="action" value="edit_rule">保存修改</button>
+<button name="action" value="delete_rule" formnovalidate>删除</button></div>
 </form>""")
     return "".join(forms) or "<p>没有可直接编辑的规则。</p>"
 
@@ -512,7 +532,7 @@ class Panel(BaseHTTPRequestHandler):
             return False
         return True
 
-    def page(self, message="", domain_input=""):
+    def page(self, message="", domain_input="", rules_open=False):
         domain_input = html.escape(domain_input)
         current = CONFIG.read_text(encoding="utf-8", errors="replace")
         rules = rule_forms(current)
@@ -530,6 +550,16 @@ input{{width:100%;max-width:34rem;padding:.5rem;box-sizing:border-box}}
 #domain{{display:block;min-height:16rem;resize:vertical;padding:.65rem;line-height:1.5;white-space:pre;overflow:auto}}
 small{{display:block;margin:.25rem 0;color:#435264}}
 button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
+.rule-row{{display:grid;grid-template-columns:5.5rem minmax(0,1fr) auto;align-items:center;gap:.65rem;padding:.5rem 0;border-bottom:1px solid #e4eaf0}}
+.rule-row[hidden]{{display:none}}
+.rule-fields{{display:flex;gap:.45rem;min-width:0}}
+.rule-fields input{{min-width:0;max-width:none}}
+.rule-actions{{display:flex;gap:.35rem}}
+.rule-actions button{{margin:0;white-space:nowrap;padding:.4rem .55rem}}
+.rule-actions button[value=delete_rule]{{color:#a12626}}
+.rule-type{{color:#435264;font-size:.875rem}}
+#rule-count{{color:#435264}}
+@media(max-width:640px){{.rule-row{{grid-template-columns:minmax(0,1fr) auto}}.rule-type{{grid-column:1/-1}}.rule-fields{{flex-wrap:wrap}}}}
 </style><h1>SNIProxy 管理</h1><p>代理状态：{status}</p><pre>{message}</pre>
 <section><h2>域名转发</h2>
 <form method="post" action="/">
@@ -553,7 +583,10 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <input id="dns" name="dns" placeholder="154.83.83.86, 149.28.158.78" required>
 <small>点击「选择国家／地区」，按中文名、英文名或两字母代码搜索后选择；也可直接输入 IP 或网段。按代理看到的 TCP 来源 IP 查询本地国家库。优先级：IP／网段 → 国家／地区 → 默认 DNS。 <a href="https://db-ip.com/" rel="noreferrer">IP Geolocation by DB-IP</a></small>
 <button name="action" value="client_dns">添加并应用</button></form></section>
-<details><summary>已添加规则：修改或删除</summary>{rules}</details>
+<details id="saved-rules" {"open" if rules_open else ""}><summary>已添加规则：修改或删除</summary>
+<label for="rule-search">搜索已添加规则</label>
+<input id="rule-search" type="search" placeholder="搜索域名、来源或 DNS" autocomplete="off">
+<span id="rule-count" aria-live="polite"></span>{rules}</details>
 <details><summary>高级配置：查看、编辑或删除规则</summary>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
@@ -617,7 +650,8 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
             message = str(error)
         except (OSError, subprocess.TimeoutExpired):
             message = "操作失败或超时，请检查代理状态和日志。"
-        self.page(message, form.get("domain", [""])[0] if action == "domain" else "")
+        self.page(message, form.get("domain", [""])[0] if action == "domain" else "",
+                  rules_open=action in ("edit_rule", "delete_rule"))
 
 
 class Server(HTTPServer):
