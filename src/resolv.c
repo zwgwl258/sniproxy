@@ -234,6 +234,8 @@ static struct Address *choose_any(struct ResolvQuery *);
 static int
 open_resolver(struct Resolver *resolver, struct ev_loop *loop,
         char **nameservers, char **search, int mode) {
+    if (resolver == &default_resolver && fallback_resolver != NULL)
+        resolver = fallback_resolver;
     struct dns_ctx *ctx = resolver->ctx;
     resolver->loop = loop;
     resolver->mode = mode;
@@ -369,6 +371,8 @@ resolv_query_client(const char *hostname, int mode, const struct sockaddr_storag
         void (*client_cb)(struct Address *, void *),
         void (*client_free_cb)(void *), void *client_cb_data) {
     struct Resolver *resolver = select_resolver(peer);
+    if (resolver == &default_resolver && fallback_resolver != NULL)
+        resolver = fallback_resolver;
     struct dns_ctx *ctx = resolver->ctx;
 
     /*
@@ -380,7 +384,7 @@ resolv_query_client(const char *hostname, int mode, const struct sockaddr_storag
         return NULL;
     }
     cb_data->ctx = ctx;
-    cb_data->fallback_hostname = (resolver != &default_resolver && fallback_resolver != NULL)
+    cb_data->fallback_hostname = (fallback_resolver != NULL && resolver != fallback_resolver)
         ? strdup(hostname) : NULL;
     cb_data->client_cb = client_cb;
     cb_data->client_free_cb = client_free_cb;
