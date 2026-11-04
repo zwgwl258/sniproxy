@@ -58,8 +58,10 @@ install -m 0644 deploy/panel.py "$lib/panel.py"
 if [[ ! -f $state/sniproxy.conf ]]; then
     install -m 0600 "${SNIPROXY_CONFIG:-deploy/default.conf}" "$state/sniproxy.conf"
 fi
+new_password=0
 if [[ ! -s $state/panel-password ]]; then
     openssl rand -hex 24 > "$state/panel-password"
+    new_password=1
 fi
 if [[ -n ${PANEL_CERT:-} ]]; then
     install -m 0600 "$PANEL_CERT" "$state/panel.crt"
@@ -99,3 +101,6 @@ url_host=$host
 [[ $host != *:* ]] || url_host="[$host]"
 printf '\nPanel: https://%s:%s/ (bind: %s)\nUser: admin\nPassword: sudo cat %s/panel-password\n' "$url_host" "$PANEL_PORT" "$PANEL_BIND" "$state"
 openssl x509 -in "$state/panel.crt" -noout -fingerprint -sha256
+if (( new_password )); then
+    printf 'Initial panel password: %s\n' "$(cat "$state/panel-password")"
+fi
