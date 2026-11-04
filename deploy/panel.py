@@ -420,6 +420,67 @@ def add_client_dns(config, client, dns):
             nameservers + "    mode ipv4_only\n}\n")
 
 
+
+def managed_rules(config):
+    for block in re.finditer(r"(?m)^([ \t]*)(table|resolver)[ \t]*\{[ \t]*(?:#[^\n]*)?\n([\s\S]*?)^[ \t]*\}[ \t]*(?:#[^\n]*)?$\n?", config):
+        body = block[3]
+        if block[2] == "table":
+            pattern = r"(?m)^[ \t]*((?:\.\*|\^\(\.\*\[\.\]\)\?)[A-Za-z0-9-]+(?:(?:\\\.|\[\.\])[A-Za-z0-9-]+)+\$[ \t]+\*)[ \t]*$\n?"
+            for rule in re.finditer(pattern, body):
+                yield ("domain", block.start(3) + rule.start(), block.start(3) + rule.end(), rule[1], "")
+        else:
+            rule = re.fullmatch(r"[ \t]*client[ \t]+(\S+)[ \t]*\n((?:[ \t]*nameserver[ \t]+\S+[ \t]*\n)+)[ \t]*mode[ \t]+ipv4_only[ \t]*\n", body)
+            if rule:
+                servers = ", ".join(line.split()[1] for line in rule[2].splitlines())
+                yield ("dns", block.start(), block.end(), rule[1], servers)
+
+
+def rule_revision(config):
+    return hashlib.sha256(config.encode()).hexdigest()
+
+
+def change_rule(config, key, action, value="", dns=""):
+    revision, _, index = key.partition(":")
+    rules = list(managed_rules(config))
+    if revision != rule_revision(config) or not index.isascii() or not index.isdecimal() or len(index) > 10:
+        raise ValueError("配置已变化，请刷新页面再操作。")
+    index = int(index)
+    if index >= len(rules):
+        raise ValueError("规则已不存在，请刷新页面。")
+    kind, start, end, old, _ = rules[index]
+    replacement = ""
+    if action == "edit_rule":
+        if kind == "dns":
+            replacement = add_client_dns("", value, dns).lstrip()
+        else:
+            if len(value.splitlines()) != 1:
+                raise ValueError("修改时只能填一条域名规则。")
+            normalized = value.strip().replace("^(.*[.])?", "").removesuffix("$ *").replace("[.]", ".") if value.startswith("^(.*[.])?") else value
+            replacement = add_domain("", normalized).split("table {\n", 1)[1].rsplit("}\n", 1)[0]
+            if replacement.strip() != old.strip() and replacement.strip() in {
+                    line.strip() for line in config.splitlines()}:
+                raise ValueError("该域名规则已存在。")
+    return config[:start] + replacement + config[end:]
+
+
+def rule_forms(config):
+    forms = []
+    revision = rule_revision(config)
+    for index, (kind, _, _, value, dns) in enumerate(managed_rules(config)):
+        value = html.escape(value, quote=True)
+        label = "域名" if kind == "domain" else "客户端 DNS"
+        dns_field = (f'<input name="dns" aria-label="DNS 服务器 IP" value="{html.escape(dns, quote=True)}" required>'
+                     if kind == "dns" else "")
+        forms.append(f"""<form method="post" action="/">
+<input type="hidden" name="nonce" value="{NONCE}">
+<input type="hidden" name="rule" value="{revision}:{index}">
+<label>{label}<input name="value" value="{value}" required></label>{dns_field}
+<button name="action" value="edit_rule">保存修改</button>
+<button name="action" value="delete_rule" formnovalidate>删除规则</button>
+</form>""")
+    return "".join(forms) or "<p>没有可直接编辑的规则。</p>"
+
+
 class Panel(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -453,7 +514,9 @@ class Panel(BaseHTTPRequestHandler):
 
     def page(self, message="", domain_input=""):
         domain_input = html.escape(domain_input)
-        config = html.escape(CONFIG.read_text(encoding="utf-8", errors="replace"))
+        current = CONFIG.read_text(encoding="utf-8", errors="replace")
+        rules = rule_forms(current)
+        config = html.escape(current)
         message = html.escape(message)
         status = "运行中" if active() else "未运行"
         self.reply(200, f"""<!doctype html><html lang="zh-CN"><meta charset="utf-8">
@@ -490,6 +553,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <input id="dns" name="dns" placeholder="154.83.83.86, 149.28.158.78" required>
 <small>点击「选择国家／地区」，按中文名、英文名或两字母代码搜索后选择；也可直接输入 IP 或网段。按代理看到的 TCP 来源 IP 查询本地国家库。优先级：IP／网段 → 国家／地区 → 默认 DNS。 <a href="https://db-ip.com/" rel="noreferrer">IP Geolocation by DB-IP</a></small>
 <button name="action" value="client_dns">添加并应用</button></form></section>
+<details><summary>已添加规则：修改或删除</summary>{rules}</details>
 <details><summary>高级配置：查看、编辑或删除规则</summary>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
@@ -516,7 +580,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
             if not 0 < size <= MAX_BODY:
                 raise ValueError
             form = parse_qs(self.rfile.read(size).decode(), keep_blank_values=True,
-                            max_num_fields=4, errors="strict")
+                            max_num_fields=5, errors="strict")
         except (UnicodeError, ValueError):
             return self.reply(400)
         if not hmac.compare_digest(form.get("nonce", [""])[0].encode(), NONCE.encode()):
@@ -532,6 +596,11 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
                     updated = add_domain(config, form["domain"][0])
                 else:
                     updated = add_client_dns(config, form["client"][0], form["dns"][0])
+                message = apply(updated.encode())
+            elif action in ("edit_rule", "delete_rule"):
+                config = CONFIG.read_text(encoding="utf-8")
+                updated = change_rule(config, form["rule"][0], action,
+                                      form.get("value", [""])[0], form.get("dns", [""])[0])
                 message = apply(updated.encode())
             elif action == "rollback":
                 message = apply(BACKUP.read_bytes(), rollback=True) if BACKUP.exists() else "没有可恢复的配置。"

@@ -98,6 +98,24 @@ with tempfile.TemporaryDirectory() as directory:
                 (root / "country.mmdb").touch()
                 assert "已保存并应用" in request(dns)[1]
                 assert b"client JP" in config.read_bytes()
+                current = config.read_text()
+                key = panel.rule_revision(current) + ":0"
+                edit = {"action": "edit_rule", "nonce": panel.NONCE,
+                        "rule": key, "value": "changed.example.com"}
+                assert "已保存并应用" in request(edit)[1]
+                assert b"changed[.]example[.]com$ *" in config.read_bytes()
+                assert "配置已变化" in request(edit)[1]
+                current = config.read_text()
+                rules = list(panel.managed_rules(current))
+                dns_index = next(i for i, rule in enumerate(rules) if rule[3] == "JP")
+                edit.update(rule=f"{panel.rule_revision(current)}:{dns_index}",
+                            value="JP", dns="8.8.8.8")
+                assert "已保存并应用" in request(edit)[1]
+                assert b"client JP\n    nameserver 8.8.8.8" in config.read_bytes()
+                edit.update(action="delete_rule",
+                            rule=f"{panel.rule_revision(config.read_text())}:{dns_index}")
+                assert "已保存并应用" in request(edit)[1]
+                assert b"client JP" not in config.read_bytes()
         finally:
             server.shutdown()
             worker.join()
