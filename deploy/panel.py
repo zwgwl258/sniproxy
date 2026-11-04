@@ -159,7 +159,8 @@ class Panel(BaseHTTPRequestHandler):
             return False
         return True
 
-    def page(self, message=""):
+    def page(self, message="", domain_input=""):
+        domain_input = html.escape(domain_input)
         config = html.escape(CONFIG.read_text(encoding="utf-8", errors="replace"))
         message = html.escape(message)
         status = "运行中" if active() else "未运行"
@@ -171,6 +172,7 @@ textarea{{width:100%;min-height:25rem;box-sizing:border-box;font:14px monospace}
 section,details{{border:1px solid #ccd5df;border-radius:.6rem;padding:1rem;margin:1rem 0}}
 label{{display:block;margin:.55rem 0 .2rem}}
 input{{width:100%;max-width:34rem;padding:.5rem;box-sizing:border-box}}
+#domain{{display:block;min-height:16rem;resize:vertical;padding:.65rem;line-height:1.5;white-space:pre;overflow:auto}}
 small{{display:block;margin:.25rem 0;color:#435264}}
 button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 </style><h1>SNIProxy 管理</h1><p>代理状态：{status}</p><pre>{message}</pre>
@@ -178,7 +180,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
 <label for="domain">域名</label>
-<textarea id="domain" name="domain" rows="8" style="min-height:8rem" placeholder="netflix.ca&#10;netflix.com" spellcheck="false" required></textarea>
+<textarea id="domain" name="domain" rows="12" wrap="off" placeholder="netflix.ca&#10;netflix.com" spellcheck="false" required>{domain_input}</textarea>
 <small>每行一个域名或一条现有的 .*netflix\\.ca$ * 格式规则，可混合粘贴。空行和重复规则会跳过；任何一行无效则整批不保存。命名转发表请用高级配置。</small>
 <button name="action" value="domain">添加并应用</button></form></section>
 <section><h2>客户端 DNS 分流</h2>
@@ -248,7 +250,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
             message = str(error)
         except (OSError, subprocess.TimeoutExpired):
             message = "操作失败或超时，请检查代理状态和日志。"
-        self.page(message)
+        self.page(message, form.get("domain", [""])[0] if action == "domain" else "")
 
 
 class Server(HTTPServer):
