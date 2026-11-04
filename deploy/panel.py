@@ -671,7 +671,7 @@ class Panel(BaseHTTPRequestHandler):
         current = CONFIG.read_text(encoding="utf-8", errors="replace")
         rules = rule_forms(current)
         fallback_dns = html.escape(next((dns for kind, _, _, source, dns in
-            reversed(list(managed_rules(current))) if kind == "dns" and source == "fallback"), ""), quote=True)
+            reversed(list(managed_rules(current))) if kind == "dns" and source == "fallback"), "").replace(", ", "\n"), quote=True)
         domains = html.escape(domain_input if domain_input is not None else "\n".join(
             domain_name(value) for kind, _, _, value, _ in managed_rules(current) if kind == "domain"
         ))
@@ -744,8 +744,8 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <input type="hidden" name="nonce" value="{NONCE}">
 <div id="dns-health">{dns_health_status()}</div>
 <label for="fallback-dns">全局兜底 DNS</label>
-<input id="fallback-dns" name="dns" value="{fallback_dns}" placeholder="1.1.1.1, 8.8.8.8">
-<small>未命中 IP／网段或国家规则时直接使用；客户端专用 DNS 未返回可用地址时也会尝试。最多 6 个 IP，逗号或空格分隔；清空后保存可关闭。</small>
+<textarea id="fallback-dns" name="dns" rows="6" spellcheck="false" placeholder="1.1.1.1&#10;8.8.8.8">{fallback_dns}</textarea>
+<small>未命中 IP／网段或国家规则时直接使用；客户端专用 DNS 未返回可用地址时也会尝试。每行一个 IP，最多 6 个；清空后保存可关闭。</small>
 <button name="action" value="fallback_dns">保存兜底 DNS</button></form></section>
 <details><summary>修改面板密码</summary>{password_form}</details>
 <details><summary>AdGuard Home 后台地址设置</summary>
