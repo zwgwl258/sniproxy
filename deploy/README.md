@@ -57,23 +57,12 @@ sudo systemctl enable sniproxy-managed.service
 IP／CIDR 优先于国家；未识别或没有规则的来源用默认 DNS。
 数据库由管理员更新，替换后在面板重启代理即可生效。不要用测试数据库部署生产服务。
 
-## AdGuard Home 一起安装
+## AdGuard Home 集成
 
-一键脚本默认安装并启动 AdGuard Home（Debian/Ubuntu amd64、arm64）。
-使用 [AdGuard Home 官方发布包](https://github.com/AdguardTeam/AdGuardHome/releases/tag/v0.107.80)
-并校验 SHA-256；官方源码和许可在上游维护，不与 SNIProxy 混编。
-两者独立运行。已有官方服务或常见路径下的安装会保留；也可设置
-`INSTALL_ADGUARD_HOME=0` 跳过。再次运行安装器不会覆盖 AdGuard Home 二进制或配置。
-
-为避免把未设密码的安装向导暴露到公网，管理后台仅监听服务器的 127.0.0.1:3000。
-在管理电脑运行以下命令（换成你的 SSH 登录地址，并保持窗口打开）：
-
-~~~bash
-ssh -N -L 3000:127.0.0.1:3000 root@SERVER_IP
-~~~
-
-然后点击 SNIProxy 面板标题右侧的「AdGuard Home 管理」。向导里保留本地管理地址，
-自行选择未被占用的 DNS 监听地址和端口，设置管理员密码。若只供同机代理使用，
-DNS 也建议只监听回环地址，不要向公网开放 53 端口。
-SNIProxy 不会自动切换 DNS。如果已有可用的 HTTPS 反代地址，
-可在面板的「AdGuard Home 后台地址设置」里替换入口，浏览器即可直达。
+一键安装默认包含 AdGuard Home（Debian/Ubuntu amd64、arm64）。
+上游 v0.107.80 源码与许可证保存在 `vendor/adguardhome/`；安装器使用同版本官方二进制并校验 SHA-256，无需在服务器安装 Go 或 Node.js。
+新安装会自动初始化，不显示安装向导。登录 SNIProxy 后，点击「AdGuard Home 管理」即可打开同一 HTTPS 入口下的后台，无需另设密码或使用 SSH 隧道。
+集成服务的 Web 后台仅监听 127.0.0.1:3000；DNS 默认仅监听 127.0.0.1:5353，不替换已有 DNS 规则。
+只将面板开放给可信管理员，并限制服务器本地登录权限：本地进程能访问回环后台。
+已完成独立初始化的 AdGuard Home 保留配置与认证，不会被迁移或重置。
+设置 INSTALL_ADGUARD_HOME=0 可跳过安装。

@@ -5,6 +5,7 @@ import html
 import hashlib
 import ipaddress
 import re
+from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import os
 from pathlib import Path
@@ -580,6 +581,8 @@ class Panel(BaseHTTPRequestHandler):
             self.reply(401, "需要管理员账号和密码。",
                        WWW_Authenticate='Basic realm="SNIProxy", charset="UTF-8"')
             return False
+        if self.path.startswith("/adguard/"):
+            return True
         if self.path != "/" and not (self.command == "GET" and
                 re.fullmatch(r"/\?result=[A-Za-z0-9_-]{22}", self.path)):
             self.reply(404)
@@ -589,7 +592,8 @@ class Panel(BaseHTTPRequestHandler):
     def page(self, message="", domain_input=None):
         address_file = ROOT / "adguard-url"
         adguard_url = html.escape(address_file.read_text(encoding="utf-8").strip(), quote=True) if address_file.is_file() else ""
-        adguard_link = adguard_url or "#adguard-url"
+        integrated = (ROOT / "adguard-integrated").is_file()
+        adguard_link = "/adguard/" if integrated else adguard_url or "#adguard-url"
         current = CONFIG.read_text(encoding="utf-8", errors="replace")
         rules = rule_forms(current)
         fallback_dns = html.escape(next((dns for kind, _, _, source, dns in
@@ -628,7 +632,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 .panel-header a{{padding:.55rem .8rem;border:1px solid #a5b8cc;border-radius:.45rem;color:#194b79;text-decoration:none}}
 .panel-header a:hover{{background:#edf5ff}}
 </style><header class="panel-header"><h1>SNIProxy 管理</h1>
-<a href="{adguard_link}" {'target="_blank" rel="noopener noreferrer"' if adguard_url else ""}>AdGuard Home 管理</a></header><p>代理状态：{status}</p><pre>{message}</pre>
+<a href="{adguard_link}" {'target="_blank" rel="noopener noreferrer"' if integrated or adguard_url else ""}>AdGuard Home 管理</a></header><p>代理状态：{status}</p><pre>{message}</pre>
 <section><h2>域名转发</h2>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
@@ -697,14 +701,76 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
         FORM_RESULTS[token] = (message, draft)
         self.reply(303, Location=f"/?result={token}")
 
+    def proxy_adguard(self):
+        if not (ROOT / "adguard-integrated").is_file():
+            return self.reply(404)
+        if self.command != "GET":
+            origin = self.headers.get("Origin")
+            if origin != "https://" + self.headers.get("Host", ""):
+                return self.reply(403, "请从已登录的管理页面提交请求。")
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+            if self.headers.get("Transfer-Encoding") or not 0 <= size <= MAX_BODY:
+                return self.reply(400)
+        except ValueError:
+            return self.reply(400)
+        target = "/" + self.path.removeprefix("/adguard/")
+        if target.startswith("//") or "\\" in target:
+            return self.reply(400)
+        if urlsplit(target).path == "/control/tls/configure":
+            return self.reply(403, "请使用 SNIProxy 的 HTTPS 管理入口。")
+        headers = {}
+        for key in ("Content-Type", "Accept"):
+            if key in self.headers:
+                headers[key] = self.headers[key]
+        conn = HTTPConnection("127.0.0.1", 3000, timeout=15)
+        try:
+            conn.request(self.command, target, body=self.rfile.read(size) if size else None,
+                         headers=headers)
+            response = conn.getresponse()
+            body = response.read(32 * 1024 * 1024 + 1)
+            if len(body) > 32 * 1024 * 1024:
+                return self.reply(502)
+            self.send_response(response.status)
+            for key in ("Content-Type", "Content-Encoding", "Content-Disposition"):
+                if response.getheader(key):
+                    self.send_header(key, response.getheader(key))
+            location = response.getheader("Location")
+            if location and location.startswith("/") and not location.startswith("//"):
+                self.send_header("Location", "/adguard" + location)
+            elif location and not urlsplit(location).netloc and not urlsplit(location).scheme:
+                self.send_header("Location", location)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (OSError, HTTPException):
+            self.reply(502, "AdGuard Home 后台暂不可用。")
+        finally:
+            conn.close()
+
+    def do_PUT(self):
+        if self.path.startswith("/adguard/") and self.authorized():
+            self.proxy_adguard()
+        elif not self.path.startswith("/adguard/"):
+            self.reply(404)
+
+    do_DELETE = do_PATCH = do_PUT
+
     def do_GET(self):
         if self.authorized():
+            if self.path.startswith("/adguard/"):
+                return self.proxy_adguard()
             token = self.path.partition("?result=")[2]
             self.page(*FORM_RESULTS.pop(token, ("", None)))
 
     def do_POST(self):
         if not self.authorized():
             return
+        if self.path.startswith("/adguard/"):
+            return self.proxy_adguard()
         try:
             size = int(self.headers.get("Content-Length", "0"))
             if not 0 < size <= MAX_BODY:

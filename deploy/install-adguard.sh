@@ -30,6 +30,23 @@ if [[ ! -x $dir/AdGuardHome ]]; then
     install -m 0755 "$tmp/AdGuardHome/AdGuardHome" "$dir/AdGuardHome"
 fi
 
+config=$dir/AdGuardHome.yaml
+marker=/etc/sniproxy-managed/adguard-integrated
+if [[ ! -e $config ]]; then
+    cat > "$config.tmp" <<'YAML'
+schema_version: 34
+users: []
+http:
+  address: 127.0.0.1:3000
+dns:
+  bind_hosts:
+    - 127.0.0.1
+  port: 5353
+YAML
+    mv -- "$config.tmp" "$config"
+    touch "$marker"
+fi
+
 install -m 0644 sniproxy-adguard.service "/etc/systemd/system/$unit"
 systemctl daemon-reload
 systemctl enable --now "$unit"
@@ -42,7 +59,7 @@ fi
 systemctl is-active --quiet "$unit"
 
 url=/etc/sniproxy-managed/adguard-url
-if [[ ! -e $url ]]; then
+if [[ ! -e $url && ! -e $marker ]]; then
     printf 'http://127.0.0.1:3000/\n' > "$url"
 fi
 echo "AdGuard Home installed: $unit (web UI on 127.0.0.1:3000)"

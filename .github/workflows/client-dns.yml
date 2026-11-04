@@ -19,7 +19,15 @@ jobs:
           sudo PANEL_BIND=127.0.0.1 PANEL_HOST=127.0.0.1 bash deploy/install.sh
           sudo systemctl is-active sniproxy-managed.service sniproxy-panel.service sniproxy-adguard.service
           curl -fsS --noproxy '*' -o /dev/null http://127.0.0.1:3000/
-          sudo grep -Fx 'http://127.0.0.1:3000/' /etc/sniproxy-managed/adguard-url
+          sudo test -f /etc/sniproxy-managed/adguard-integrated
+          cert=/etc/sniproxy-managed/panel.crt
+          base=https://127.0.0.1:9443/adguard/
+          password=$(sudo cat /etc/sniproxy-managed/panel-password)
+          test "$(sudo curl -sS --cacert "$cert" -o /dev/null -w '%{http_code}' "$base")" = 401
+          sudo curl -fsS --cacert "$cert" --user "admin:$password" "$base" -o /tmp/adguard-ui.html
+          grep -i 'AdGuard Home' /tmp/adguard-ui.html
+          sudo curl -fsS --cacert "$cert" --user "admin:$password" "${base}control/status" | python3 -m json.tool
+          test "$(sudo curl -sS --cacert "$cert" --user "admin:$password" -X POST -H 'Origin: https://evil.example' -o /dev/null -w '%{http_code}' "${base}control/status")" = 403
           sudo mmdblookup --file /etc/sniproxy-managed/country.mmdb --ip 8.8.8.8 country iso_code
           password=$(sudo cat /etc/sniproxy-managed/panel-password)
           sudo curl --fail --silent --show-error --cacert /etc/sniproxy-managed/panel.crt \
