@@ -1,9 +1,9 @@
 [Unit]
-Description=Benchmark SNIProxy fallback DNS every five minutes
+Description=Benchmark SNIProxy fallback DNS every thirty minutes
 
 [Timer]
 OnBootSec=15s
-OnUnitActiveSec=5min
+OnUnitActiveSec=30min
 AccuracySec=5s
 
 [Install]

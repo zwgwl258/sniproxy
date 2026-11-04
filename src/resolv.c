@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -389,35 +390,66 @@ best_fallback_probe(void) {
     return best;
 }
 
+struct BenchmarkRoute {
+    char domain[254];
+    char server[INET6_ADDRSTRLEN];
+};
+
 static const struct DnsProbe *
-benchmark_preference(void) {
+benchmark_preference(const char *hostname) {
     static time_t checked;
-    static char server[INET6_ADDRSTRLEN];
+    static struct BenchmarkRoute *routes;
+    static size_t count;
     time_t now = time(NULL);
     if (now != checked) {
         checked = now;
-        server[0] = '\0';
+        count = 0;
+        free(routes);
+        routes = NULL;
         FILE *report = fopen("/run/sniproxy-dns-benchmark", "r");
         if (report != NULL) {
             struct stat info;
+            size_t capacity = 0;
+            char line[sizeof(struct BenchmarkRoute) + 4];
             if (fstat(fileno(report), &info) == 0 && info.st_mtime <= now &&
-                    now - info.st_mtime <= 720 && fgets(server, sizeof(server), report) != NULL)
-                server[strcspn(server, "\r\n")] = '\0';
+                    now - info.st_mtime <= 4500) {
+                while (fgets(line, sizeof(line), report) != NULL && line[0] != '\n') {
+                    struct BenchmarkRoute route;
+                    if (sscanf(line, "%253s %45s", route.domain, route.server) != 2)
+                        break;
+                    if (count == capacity) {
+                        size_t next = capacity ? capacity * 2 : 32;
+                        struct BenchmarkRoute *grown = realloc(routes, next * sizeof(*routes));
+                        if (grown == NULL)
+                            break;
+                        routes = grown;
+                        capacity = next;
+                    }
+                    routes[count++] = route;
+                }
+            }
             fclose(report);
         }
     }
-    for (const struct DnsProbe *p = fallback_resolver->probes; p != NULL; p = p->next)
-        if (strcmp(p->server, server) == 0)
-            return p;
+    size_t len = strlen(hostname);
+    if (len && hostname[len - 1] == '.')
+        len--;
+    for (size_t i = 0; i < count; i++) {
+        if (strlen(routes[i].domain) != len || strncasecmp(routes[i].domain, hostname, len) != 0)
+            continue;
+        for (const struct DnsProbe *p = fallback_resolver->probes; p != NULL; p = p->next)
+            if (strcmp(p->server, routes[i].server) == 0)
+                return p;
+        break;
+    }
     return NULL;
 }
 
-
 static const struct DnsProbe *
-preferred_fallback(void) {
+preferred_fallback(const char *hostname) {
     if (fallback_resolver == NULL)
         return NULL;
-    const struct DnsProbe *best = benchmark_preference();
+    const struct DnsProbe *best = benchmark_preference(hostname);
     if (best == NULL)
         best = best_fallback_probe();
     return best != NULL ? best : fallback_resolver->probes;
@@ -534,7 +566,7 @@ resolv_query_client(const char *hostname, int mode, const struct sockaddr_storag
     if (fallback_resolver != NULL &&
             (resolver == &default_resolver || resolver_unhealthy(resolver)))
         resolver = fallback_resolver;
-    const struct DnsProbe *preferred = preferred_fallback();
+    const struct DnsProbe *preferred = preferred_fallback(hostname);
     struct dns_ctx *ctx = resolver == fallback_resolver && preferred != NULL
         ? preferred->endpoint.ctx : resolver->ctx;
 

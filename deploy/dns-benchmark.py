@@ -25,8 +25,6 @@ def targets(config):
         domain = domain_name(rule).lower()
         if re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)+", domain) and domain not in domains:
             domains.append(domain)
-        if len(domains) == 3:
-            break
     fallback = next((servers for kind, _, _, source, servers in reversed(rules)
                      if kind == "dns" and source == "fallback"), "")
     return domains, list(dict.fromkeys(str(ipaddress.ip_address(ip))
@@ -130,26 +128,32 @@ def main():
     config = CONFIG.read_text(encoding="utf-8")
     domains, servers = targets(config)
     try:
-        old = json.loads(REPORT.read_text(encoding="utf-8").split("\n", 1)[1])
+        old = json.loads(REPORT.read_text(encoding="utf-8").rsplit("\n", 1)[1])
     except (OSError, ValueError, IndexError):
         old = {}
-    if old.get("domains") != domains or old.get("servers") != servers or time.time() - old.get("time", 0) > 900:
+    if old.get("domains") != domains or old.get("servers") != servers or time.time() - old.get("time", 0) > 4500:
         old = {}
-    rounds, scores = [], {}
-    preferred = pending = ""
+    by_domain = {}
     if domains and servers:
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            latest = dict(zip(servers, pool.map(lambda ip: measure(ip, domains), servers)))
-        rounds = [*old.get("rounds", [])[-2:], latest]
-        scores = summarize(rounds, servers)
-        preferred, pending = select(scores, old.get("preferred"), old.get("pending"), latest)
+        jobs = [(ip, offset) for ip in servers for offset in range(0, len(domains), 16)]
+        latest = {domain: {} for domain in domains}
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = pool.map(lambda job: measure(job[0], domains[job[1]:job[1] + 16]), jobs)
+            for (ip, offset), result in zip(jobs, results):
+                for i, domain in enumerate(domains[offset:offset + 16]):
+                    latest[domain][ip] = {kind: [result[kind][i]] for kind in ("dns", "proxy")}
+        for domain, sample in latest.items():
+            prior = old.get("by_domain", {}).get(domain, {})
+            rounds = [*prior.get("rounds", [])[-2:], sample]
+            scores = summarize(rounds, servers)
+            preferred, pending = select(scores, prior.get("preferred"), prior.get("pending"), sample)
+            by_domain[domain] = dict(rounds=rounds, scores=scores, preferred=preferred, pending=pending)
     if CONFIG.read_text(encoding="utf-8") != config:
         return
-    report = dict(domains=domains, servers=servers, rounds=rounds, scores=scores,
-                  preferred=preferred, pending=pending, time=time.time())
-    # The proxy only reads the first line; the panel reads the full report.
-    atomic_write(REPORT, (f"{preferred or '-'}\n" + json.dumps(report)).encode("utf-8"),
-                 mode=0o644)
+    report = dict(domains=domains, servers=servers, by_domain=by_domain, time=time.time())
+    routes = "".join(f"{domain} {data['preferred']}\n" for domain, data in by_domain.items()
+                     if data["preferred"])
+    atomic_write(REPORT, (routes + "\n" + json.dumps(report)).encode("utf-8"), mode=0o644)
 
 
 if __name__ == "__main__":

@@ -157,7 +157,7 @@ table {{
             if os.environ.get("SNIPROXY_TEST_BENCHMARK_SWITCH"):
                 status = Path("/run/sniproxy-dns-benchmark")
                 with status.open("x", encoding="ascii") as out:
-                    out.write("127.0.0.60\n")
+                    out.write("route.test 127.0.0.60\n\n{}")
                 try:
                     time.sleep(1.1)
                     assert request(port, "127.0.0.9") == "127.0.0.10"

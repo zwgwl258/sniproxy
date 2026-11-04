@@ -391,26 +391,29 @@ def dns_health_status():
 def dns_benchmark_status():
     try:
         report = json.loads(Path("/run/sniproxy-dns-benchmark").read_text(
-            encoding="utf-8").split("\n", 1)[1])
+            encoding="utf-8").rsplit("\n", 1)[1])
     except (OSError, ValueError, IndexError):
         return "<p>综合测速：等待本机代理测试。</p>"
-    if time.time() - report["time"] > 720:
-        return "<p>综合测速结果已过期，暂按 DNS 探测结果选优。</p>"
-    if not report["scores"]:
-        return "<p>综合测速未运行：需要可识别的已配置域名和兜底 DNS。</p>"
-    domains = html.escape("、".join(report["domains"]))
-    selected = html.escape(report["preferred"]) or "无（沿用 DNS 探测策略）"
+    if time.time() - report["time"] > 4500:
+        return "<p>逐域名测速结果已过期，暂按 DNS 探测结果选优。</p>"
+    if not report.get("by_domain"):
+        return "<p>逐域名测速未运行：需要可识别的已配置域名和兜底 DNS。</p>"
     def metric(value):
         passed, total, ms = value
         return f"{passed}/{total} · {ms:g} ms" if ms is not None else f"{passed}/{total} · —"
-    rows = "".join(
-        f"<tr><td>{html.escape(ip)}</td><td>{metric(score['proxy'])}</td>"
-        f"<td>{metric(score['dns'])}</td></tr>" for ip, score in report["scores"].items()
-    )
-    return (f"<p><strong>综合测速首选：</strong>{selected} · 测试域名：{domains}</p>"
-            "<table><thead><tr><th>兜底 DNS</th><th>代理访问成功／总数 · 首字节</th>"
-            "<th>DNS 成功／总数 · 解析耗时</th></tr></thead>"
-            f"<tbody>{rows}</tbody></table>")
+    sections = []
+    for domain, data in report["by_domain"].items():
+        selected = html.escape(data["preferred"]) or "无（沿用 DNS 探测）"
+        rows = "".join(
+            f"<tr><td>{html.escape(ip)}</td><td>{metric(score['proxy'])}</td>"
+            f"<td>{metric(score['dns'])}</td></tr>" for ip, score in data["scores"].items()
+        )
+        sections.append(f"<details><summary>{html.escape(domain)} · 首选：{selected}</summary>"
+                        "<table><thead><tr><th>兜底 DNS</th><th>代理成功／总数 · 首字节</th>"
+                        "<th>DNS 成功／总数 · 解析耗时</th></tr></thead>"
+                        f"<tbody>{rows}</tbody></table></details>")
+    return (f"<details><summary>逐域名综合测速（{len(sections)} 个，每 30 分钟）</summary>"
+            + "".join(sections) + "</details>")
 
 
 

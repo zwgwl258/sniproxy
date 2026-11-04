@@ -6,5 +6,5 @@ Requisite=sniproxy-managed.service
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 /usr/local/lib/sniproxy-managed/dns-benchmark.py
-TimeoutStartSec=4min
+TimeoutStartSec=28min
 Nice=10

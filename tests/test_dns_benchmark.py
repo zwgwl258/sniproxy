@@ -17,6 +17,8 @@ class BenchmarkTests(unittest.TestCase):
 table {
     .*example\.com$ *
     .*example\.org$ *
+    .*example\.net$ *
+    .*example\.edu$ *
     ^host[0-9]+[.]example[.]net$ *
 }
 resolver {
@@ -25,7 +27,7 @@ resolver {
     nameserver 192.0.2.2
     mode ipv4_only
 }
-"""), (["example.com", "example.org"], ["192.0.2.1", "192.0.2.2"]))
+"""), (["example.com", "example.org", "example.net", "example.edu"], ["192.0.2.1", "192.0.2.2"]))
 
     def test_rank_and_hysteresis(self):
         round1 = {"a": {"proxy": [20, None], "dns": [1, 1]},
