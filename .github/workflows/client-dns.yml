@@ -47,3 +47,22 @@ jobs:
           password=$(sudo cat /etc/sniproxy-managed/panel-password)
           sudo curl --fail --silent --show-error --cacert /etc/sniproxy-managed/panel.crt \
             --user "admin:$password" https://127.0.0.1:9443/ | grep -q 'SNIProxy 管理'
+
+  debian-11-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile with Debian 11 Autoconf 2.69
+        run: |
+          docker run --rm -v "$PWD:/source:ro" debian:11 sh -ec '
+            apt-get update
+            apt-get install -y build-essential autoconf automake libev-dev libpcre2-dev libudns-dev libmaxminddb-dev
+            autoconf --version
+            mkdir /build
+            cp -a /source/. /build/
+            cd /build
+            autoreconf -fi
+            ./configure --enable-dns
+            make -j2
+            make -C tests config_test
+          '
