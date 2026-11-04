@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import time
 
-from panel import CONFIG, atomic_write, domain_name, managed_rules
+from panel import CONFIG, atomic_write, domain_blocks, domain_name, managed_rules
 
 REPORT = Path("/run/sniproxy-dns-benchmark")
 BINARY = "/usr/local/lib/sniproxy-managed/sniproxy"
@@ -134,6 +134,8 @@ def main():
     if old.get("domains") != domains or old.get("servers") != servers or time.time() - old.get("time", 0) > 4500:
         old = {}
     by_domain = {}
+    groups = {}
+    strict = set()
     if domains and servers:
         jobs = [(ip, offset) for ip in servers for offset in range(0, len(domains), 16)]
         latest = {domain: {} for domain in domains}
@@ -148,10 +150,32 @@ def main():
             scores = summarize(rounds, servers)
             preferred, pending = select(scores, prior.get("preferred"), prior.get("pending"), sample)
             by_domain[domain] = dict(rounds=rounds, scores=scores, preferred=preferred, pending=pending)
+        blocks = domain_blocks(config)
+        if len(blocks) > 1:
+            for block in blocks:
+                members = list(dict.fromkeys(domain_name(rule).lower() for rule in block
+                                             if domain_name(rule).lower() in latest))
+                if not members:
+                    continue
+                key = ",".join(members)
+                sample = {ip: {kind: [latest[domain][ip][kind][0] for domain in members]
+                               for kind in ("dns", "proxy")} for ip in servers}
+                prior = old.get("groups", {}).get(key, {})
+                rounds = [*prior.get("rounds", [])[-2:], sample]
+                scores = summarize(rounds, servers)
+                eligible = {ip: score for ip, score in scores.items()
+                            if all(ms is not None for ms in sample[ip]["proxy"])}
+                preferred, pending = select(eligible, prior.get("preferred"), prior.get("pending"), sample)
+                preferred = preferred or prior.get("preferred") or servers[0]
+                groups[key] = dict(rounds=rounds, preferred=preferred, pending=pending)
+                for domain in members:
+                    by_domain[domain]["preferred"] = preferred
+                    by_domain[domain]["group"] = members[0]
+                    strict.add(domain)
     if CONFIG.read_text(encoding="utf-8") != config:
         return
-    report = dict(domains=domains, servers=servers, by_domain=by_domain, time=time.time())
-    routes = "".join(f"{domain} {data['preferred']}\n" for domain, data in by_domain.items()
+    report = dict(domains=domains, servers=servers, by_domain=by_domain, groups=groups, time=time.time())
+    routes = "".join(f"{domain} {data['preferred']}{' !' if domain in strict else ''}\n" for domain, data in by_domain.items()
                      if data["preferred"])
     atomic_write(REPORT, (routes + "\n" + json.dumps(report)).encode("utf-8"), mode=0o644)
 

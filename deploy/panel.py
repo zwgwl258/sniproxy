@@ -408,7 +408,8 @@ def dns_benchmark_status():
             f"<tr><td>{html.escape(ip)}</td><td>{metric(score['proxy'])}</td>"
             f"<td>{metric(score['dns'])}</td></tr>" for ip, score in data["scores"].items()
         )
-        sections.append(f"<details><summary>{html.escape(domain)} · 首选：{selected}</summary>"
+        group = f" · 组：{html.escape(data['group'])}" if data.get("group") else ""
+        sections.append(f"<details><summary>{html.escape(domain)}{group} · 首选：{selected}</summary>"
                         "<table><thead><tr><th>兜底 DNS</th><th>代理成功／总数 · 首字节</th>"
                         "<th>DNS 成功／总数 · 解析耗时</th></tr></thead>"
                         f"<tbody>{rows}</tbody></table></details>")
@@ -566,6 +567,19 @@ def domain_name(rule):
             .removesuffix("$").replace(r"\.", ".").replace("[.]", "."))
 
 
+def domain_blocks(config):
+    blocks = []
+    previous = None
+    for kind, start, end, rule, _ in managed_rules(config):
+        if kind != "domain":
+            continue
+        if previous is None or re.search(r"(?m)^[ \t]*\r?\n", config[previous:start]):
+            blocks.append([])
+        blocks[-1].append(rule)
+        previous = end
+    return blocks
+
+
 def replace_domains(config, revision, value):
     if revision != rule_revision(config):
         raise ValueError("配置已变化，请刷新页面再保存。")
@@ -576,17 +590,25 @@ def replace_domains(config, revision, value):
         name = domain_name(rule)
         if name != rule:
             aliases.setdefault(name.lower(), []).append(rule)
-    entries = list(dict.fromkeys(
-        rule for entry, name in domain_entries(value) for rule in aliases.get(name, [entry])))
-    rows = ["    " + entry + "\n" for entry in entries]
+    list(domain_entries(value))
+    rows = []
+    seen = set()
+    for block in re.split(r"\n(?:[ \t]*\n)+", value.replace("\r\n", "\n").strip()):
+        first = True
+        for entry, name in domain_entries(block):
+            for rule in aliases.get(name, [entry]):
+                if rule not in seen:
+                    rows.append(("\n" if first and rows else "") + "    " + rule + "\n")
+                    seen.add(rule)
+                    first = False
     if not old:
         return insert_domains(config, "".join(rows)) if rows else config
     for i in reversed(range(len(old))):
-        start, end, rule = old[i]
+        start, end, _ = old[i]
+        if i and not config[old[i - 1][1]:start].strip():
+            start = old[i - 1][1]
         if i == len(old) - 1:
             replacement = "".join(rows[i:])
-        elif i < len(rows) and entries[i] == rule:
-            replacement = config[start:end]
         else:
             replacement = "".join(rows[i:i + 1])
         config = config[:start] + replacement + config[end:]
@@ -706,8 +728,8 @@ class Panel(BaseHTTPRequestHandler):
         rules = rule_forms(current)
         fallback_dns = html.escape(next((dns for kind, _, _, source, dns in
             reversed(list(managed_rules(current))) if kind == "dns" and source == "fallback"), "").replace(", ", "\n"), quote=True)
-        domains = html.escape(domain_input if domain_input is not None else "\n".join(
-            value for kind, _, _, value, _ in managed_rules(current) if kind == "domain"
+        domains = html.escape(domain_input if domain_input is not None else "\n\n".join(
+            "\n".join(block) for block in domain_blocks(current)
         ))
         config = html.escape(current)
         message = html.escape(message)
@@ -748,7 +770,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <input type="hidden" name="revision" value="{rule_revision(current)}">
 <label for="saved-domains">域名列表（原版规则，每行一条）</label>
 <textarea id="saved-domains" name="domain" rows="12" spellcheck="false" placeholder=".*netflix&#92;.ca$ *&#10;.*netflix&#92;.com$ *">{domains}</textarea>
-<small>每行填写一个域名或一条以 * 为转发目标的原版 SNIProxy 正则规则。支持批量粘贴、修改、删除；其他转发目标不受影响。</small>
+<small>组与组之间留一个空白行。每行填写一个域名或一条以 * 为转发目标的原版 SNIProxy 正则规则。支持批量粘贴、修改、删除；其他转发目标不受影响。</small>
 <button name="action" value="save_domains">保存域名列表</button></form></section>
 <section><h2>客户端 DNS 分流</h2>
 <form method="post" action="/">

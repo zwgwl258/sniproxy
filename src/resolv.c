@@ -157,6 +157,7 @@ struct ResolvQuery {
     char *fallback_hostname;
     const struct DnsProbe *fallback_next;
     const struct DnsProbe *fallback_first;
+    int strict_fallback;
     int fallback_preferred_pending;
     void (*client_cb)(struct Address *, void *);
     void (*client_free_cb)(void *);
@@ -391,12 +392,13 @@ best_fallback_probe(void) {
 }
 
 struct BenchmarkRoute {
+    char strict;
     char domain[254];
     char server[INET6_ADDRSTRLEN];
 };
 
 static const struct DnsProbe *
-benchmark_preference(const char *hostname) {
+benchmark_preference(const char *hostname, int *strict) {
     static time_t checked;
     static struct BenchmarkRoute *routes;
     static size_t count;
@@ -414,8 +416,8 @@ benchmark_preference(const char *hostname) {
             if (fstat(fileno(report), &info) == 0 && info.st_mtime <= now &&
                     now - info.st_mtime <= 4500) {
                 while (fgets(line, sizeof(line), report) != NULL && line[0] != '\n') {
-                    struct BenchmarkRoute route;
-                    if (sscanf(line, "%253s %45s", route.domain, route.server) != 2)
+                    struct BenchmarkRoute route = {0};
+                    if (sscanf(line, "%253s %45s %c", route.domain, route.server, &route.strict) < 2)
                         break;
                     if (count == capacity) {
                         size_t next = capacity ? capacity * 2 : 32;
@@ -434,22 +436,31 @@ benchmark_preference(const char *hostname) {
     size_t len = strlen(hostname);
     if (len && hostname[len - 1] == '.')
         len--;
+    const struct BenchmarkRoute *match = NULL;
+    size_t matched = 0;
     for (size_t i = 0; i < count; i++) {
-        if (strlen(routes[i].domain) != len || strncasecmp(routes[i].domain, hostname, len) != 0)
+        size_t n = strlen(routes[i].domain);
+        if (n <= matched || n > len ||
+                (n != len && (routes[i].strict != '!' || hostname[len - n - 1] != '.')) ||
+                strncasecmp(routes[i].domain, hostname + len - n, n) != 0)
             continue;
-        for (const struct DnsProbe *p = fallback_resolver->probes; p != NULL; p = p->next)
-            if (strcmp(p->server, routes[i].server) == 0)
-                return p;
-        break;
+        match = &routes[i];
+        matched = n;
     }
+    if (match != NULL)
+        for (const struct DnsProbe *p = fallback_resolver->probes; p != NULL; p = p->next)
+            if (strcmp(p->server, match->server) == 0) {
+                *strict = match->strict == '!';
+                return p;
+            }
     return NULL;
 }
 
 static const struct DnsProbe *
-preferred_fallback(const char *hostname) {
+preferred_fallback(const char *hostname, int *strict) {
     if (fallback_resolver == NULL)
         return NULL;
-    const struct DnsProbe *best = benchmark_preference(hostname);
+    const struct DnsProbe *best = benchmark_preference(hostname, strict);
     if (best == NULL)
         best = best_fallback_probe();
     return best != NULL ? best : fallback_resolver->probes;
@@ -566,7 +577,8 @@ resolv_query_client(const char *hostname, int mode, const struct sockaddr_storag
     if (fallback_resolver != NULL &&
             (resolver == &default_resolver || resolver_unhealthy(resolver)))
         resolver = fallback_resolver;
-    const struct DnsProbe *preferred = preferred_fallback(hostname);
+    int strict = 0;
+    const struct DnsProbe *preferred = preferred_fallback(hostname, &strict);
     struct dns_ctx *ctx = resolver == fallback_resolver && preferred != NULL
         ? preferred->endpoint.ctx : resolver->ctx;
 
@@ -585,6 +597,9 @@ resolv_query_client(const char *hostname, int mode, const struct sockaddr_storag
         resolver != fallback_resolver ? preferred : fallback_resolver->probes;
     if (resolver == fallback_resolver && cb_data->fallback_next == preferred && preferred != NULL)
         cb_data->fallback_next = preferred->next;
+    cb_data->strict_fallback = strict;
+    if (strict)
+        cb_data->fallback_next = resolver == fallback_resolver ? preferred : NULL;
     cb_data->fallback_hostname = cb_data->fallback_next != NULL ? strdup(hostname) : NULL;
     cb_data->client_cb = client_cb;
     cb_data->client_free_cb = client_free_cb;
@@ -639,7 +654,7 @@ retry_fallback(struct ResolvQuery *query) {
     do {
         const struct DnsProbe *next = query->fallback_next;
         query->ctx = next->endpoint.ctx;
-        query->fallback_next = query->fallback_preferred_pending
+        query->fallback_next = query->strict_fallback ? NULL : query->fallback_preferred_pending
             ? fallback_resolver->probes : next->next;
         query->fallback_preferred_pending = 0;
         if (query->fallback_next == query->fallback_first)
