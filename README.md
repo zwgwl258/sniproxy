@@ -7,25 +7,19 @@
 **支持 Debian / Ubuntu（systemd，amd64 或 arm64）。** 在服务器上以 **root** 执行。不需要 Git、GitHub 登录或手动上传国家数据库。
 
 ```bash
-f=$(mktemp) && curl -fLsS 'https://raw.githubusercontent.com/zwgwl258/sniproxy/5000515f51a298ceb2997a0f652a466d22c4b178/install_cmd.sh' -o "$f" && bash "$f"
+f=$(mktemp) && curl -fLsS 'https://raw.githubusercontent.com/zwgwl258/sniproxy/0861f7791c099345a852fbf926386e0357ba6813/install_cmd.sh' -o "$f" && bash "$f"
 ```
 
 此命令固定到已验证的安装版本，不受仓库首页文档更新影响。安装器会校验下载的归档。
-[查看部署和首次改密测试](https://github.com/zwgwl258/sniproxy/actions/runs/41871429767)。
+[查看 Linux 部署和 Debian 11 构建验证](https://github.com/zwgwl258/sniproxy/actions/runs/41918013012)。
 
-- **全新安装**：成功后终端会显示面板地址、用户名 `admin` 和初始密码。首次登录必须修改密码（12–128 个字符），然后用新密码重新登录。不要公开安装输出中的密码。
+- **全新安装**：仅在配置文件不存在时写入默认模板，预置 12 个域名组（324 条规则），全局兜底 DNS 留空，使用系统 DNS。成功后终端会显示面板地址、用户名 `admin` 和初始密码。首次登录必须修改密码（12–128 个字符），然后用新密码重新登录。不要公开安装输出中的密码。
 - **覆盖升级**：运行同一条命令即可保留域名、DNS 规则和已有面板密码，服务可能短暂重启。平时可以从「修改面板密码」更换密码。
 - **旧服务**：若旧的 `sniproxy.service` 正在运行，安装器不会停掉它，也不会启动新版代理抢占端口。已独立初始化的 AdGuard Home 不会被重置或自动迁移到统一登录。
 
 ### Debian 11：Autoconf 2.69
 
-如果日志报 `Autoconf version 2.71 or higher is required`，请改用下面的兼容安装包，不用卸载已安装的依赖：
-
-~~~bash
-f=$(mktemp) && curl -fLsS 'https://raw.githubusercontent.com/zwgwl258/sniproxy/fa4561d8ee466397cf60547f3b722fb8493e9f3c/install_cmd.sh' -o "$f" && bash "$f"
-~~~
-
-[查看 Debian 11 构建验证](https://github.com/zwgwl258/sniproxy/actions/runs/41876223123)。
+直接使用上面同一条安装命令，不需要另用旧版安装包。安装器所用源码已通过 Debian 11 构建验证。
 
 ## 使用面板
 
