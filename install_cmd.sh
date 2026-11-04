@@ -2,8 +2,8 @@
 set -euo pipefail
 umask 077
 
-archive_url='https://codeload.github.com/zwgwl258/sniproxy/tar.gz/153ea1e801175f208c3b1c71abf2549b4983be66'
-archive_sha256='d9ff9e8ddf049c945b48a2537dd000b68c12c90d60ca2c8143b746eb5f94bb2f'
+archive_url='https://codeload.github.com/zwgwl258/sniproxy/tar.gz/bb435477e3ba74d135bea986089f5a1d35a801bb'
+archive_sha256='c9655a9c70c69fad22c5600c696677838e61bcb1de4535fcce30a2fc5b521c82'
 
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
