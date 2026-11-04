@@ -4,6 +4,7 @@ import hmac
 import html
 import hashlib
 import ipaddress
+import json
 import re
 from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -381,16 +382,44 @@ def dns_health_status():
         primary = "暂无选中节点"
     failed = [f"{html.escape(server)}（{html.escape(source if source != 'fallback' else '兜底')}）"
               for (source, server), latency in readings.items() if latency < 0]
-    return (f"<p><strong>当前首选兜底 DNS：</strong>{primary}</p>"
+    return (f"<p><strong>DNS 探测最快节点：</strong>{primary}</p>"
             f"<p><strong>不可用 DNS：</strong>{'、'.join(failed) or '已探测节点中无故障'}</p>"
             "<small>每 5 分钟复测，刷新页面查看最近结果。</small>")
 
 
 
-def atomic_write(path, data):
+def dns_benchmark_status():
+    try:
+        report = json.loads(Path("/run/sniproxy-dns-benchmark").read_text(
+            encoding="utf-8").split("\n", 1)[1])
+    except (OSError, ValueError, IndexError):
+        return "<p>综合测速：等待本机代理测试。</p>"
+    if time.time() - report["time"] > 720:
+        return "<p>综合测速结果已过期，暂按 DNS 探测结果选优。</p>"
+    if not report["scores"]:
+        return "<p>综合测速未运行：需要可识别的已配置域名和兜底 DNS。</p>"
+    domains = html.escape("、".join(report["domains"]))
+    selected = html.escape(report["preferred"]) or "无（沿用 DNS 探测策略）"
+    def metric(value):
+        passed, total, ms = value
+        return f"{passed}/{total} · {ms:g} ms" if ms is not None else f"{passed}/{total} · —"
+    rows = "".join(
+        f"<tr><td>{html.escape(ip)}</td><td>{metric(score['proxy'])}</td>"
+        f"<td>{metric(score['dns'])}</td></tr>" for ip, score in report["scores"].items()
+    )
+    return (f"<p><strong>综合测速首选：</strong>{selected} · 测试域名：{domains}</p>"
+            "<table><thead><tr><th>兜底 DNS</th><th>代理访问成功／总数 · 首字节</th>"
+            "<th>DNS 成功／总数 · 解析耗时</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table>")
+
+
+
+def atomic_write(path, data, *, mode=None):
     with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as temp:
         tmp = Path(temp.name)
         try:
+            if mode is not None:
+                os.fchmod(temp.fileno(), mode)
             temp.write(data)
             temp.flush()
             os.fsync(temp.fileno())
@@ -745,7 +774,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 </nav>{rules}</div>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
-<div id="dns-health">{dns_health_status()}</div>
+<div id="dns-health">{dns_benchmark_status()}{dns_health_status()}</div>
 <label for="fallback-dns">全局兜底 DNS</label>
 <textarea id="fallback-dns" name="dns" rows="6" spellcheck="false" placeholder="1.1.1.1&#10;8.8.8.8">{fallback_dns}</textarea>
 <small>未命中 IP／网段或国家规则时直接使用；客户端专用 DNS 未返回可用地址时也会尝试。每行一个 IP；清空后保存可关闭。</small>

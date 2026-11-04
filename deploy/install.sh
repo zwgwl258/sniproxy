@@ -20,7 +20,7 @@ if [[ -n ${PANEL_CERT:-} || -n ${PANEL_KEY:-} ]]; then
 fi
 
 apt-get update
-apt-get install -y build-essential autoconf automake libev-dev libpcre2-dev libudns-dev libmaxminddb-dev mmdb-bin curl gzip python3 openssl
+apt-get install -y build-essential autoconf automake libev-dev libpcre2-dev libudns-dev libmaxminddb-dev mmdb-bin dnsutils curl gzip python3 openssl
 autoreconf -fi
 ./configure --enable-dns
 make -j"$(nproc)"
@@ -54,7 +54,7 @@ fi
 install -d -m 0755 "$lib"
 install -m 0755 src/sniproxy "$lib/sniproxy"
 install -m 0755 tests/config_test "$lib/config-test"
-install -m 0644 deploy/panel.py "$lib/panel.py"
+install -m 0644 deploy/panel.py deploy/dns-benchmark.py "$lib/"
 if [[ ! -f $state/sniproxy.conf ]]; then
     install -m 0600 "${SNIPROXY_CONFIG:-deploy/default.conf}" "$state/sniproxy.conf"
 fi
@@ -79,7 +79,7 @@ fi
 if [[ ! -f $state/panel.env || -v PANEL_BIND || -v PANEL_PORT ]]; then
     printf 'PANEL_BIND=%s\nPANEL_PORT=%s\n' "$bind" "$port" > "$state/panel.env"
 fi
-install -m 0644 deploy/sniproxy-managed.service deploy/sniproxy-panel.service /etc/systemd/system/
+install -m 0644 deploy/sniproxy-managed.service deploy/sniproxy-panel.service deploy/sniproxy-dns-benchmark.service deploy/sniproxy-dns-benchmark.timer /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable sniproxy-panel.service
 systemctl restart sniproxy-panel.service
@@ -92,6 +92,10 @@ else
     if ! systemctl restart sniproxy-managed.service || ! (sleep 1; systemctl is-active --quiet sniproxy-managed.service); then
         echo "Proxy did not start; review its configuration in the panel." >&2
     fi
+fi
+systemctl enable --now sniproxy-dns-benchmark.timer
+if systemctl is-active --quiet sniproxy-managed.service; then
+    systemctl start --no-block sniproxy-dns-benchmark.service
 fi
 if [[ ${INSTALL_ADGUARD_HOME:-1} != 0 ]]; then
     bash deploy/install-adguard.sh

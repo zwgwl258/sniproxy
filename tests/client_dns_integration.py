@@ -43,6 +43,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(self.server.server_address[0].encode())
 
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
     def log_message(self, *_):
         pass
 
@@ -150,6 +154,18 @@ table {{
             if actual != expected:
                 raise AssertionError(f"Expected {expected}, got {actual}")
             assert not failed_requests, "Unhealthy client DNS received a live query"
+            if os.environ.get("SNIPROXY_TEST_BENCHMARK_SWITCH"):
+                status = Path("/run/sniproxy-dns-benchmark")
+                with status.open("x", encoding="ascii") as out:
+                    out.write("127.0.0.60\n")
+                try:
+                    time.sleep(1.1)
+                    assert request(port, "127.0.0.9") == "127.0.0.10"
+                    assert proxy.poll() is None
+                finally:
+                    status.unlink()
+                time.sleep(1.1)
+                assert request(port, "127.0.0.9") == "127.0.0.11"
             print("Client DNS routing passed")
         finally:
             proxy.terminate()

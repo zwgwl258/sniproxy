@@ -33,6 +33,8 @@
 #include <arpa/inet.h>
 #include <ev.h>
 #include <errno.h>
+#include <sys/stat.h>
+#include <time.h>
 #ifdef HAVE_LIBUDNS
 #include <udns.h>
 #ifdef HAVE_LIBMAXMINDDB
@@ -388,10 +390,36 @@ best_fallback_probe(void) {
 }
 
 static const struct DnsProbe *
+benchmark_preference(void) {
+    static time_t checked;
+    static char server[INET6_ADDRSTRLEN];
+    time_t now = time(NULL);
+    if (now != checked) {
+        checked = now;
+        server[0] = '\0';
+        FILE *report = fopen("/run/sniproxy-dns-benchmark", "r");
+        if (report != NULL) {
+            struct stat info;
+            if (fstat(fileno(report), &info) == 0 && info.st_mtime <= now &&
+                    now - info.st_mtime <= 720 && fgets(server, sizeof(server), report) != NULL)
+                server[strcspn(server, "\r\n")] = '\0';
+            fclose(report);
+        }
+    }
+    for (const struct DnsProbe *p = fallback_resolver->probes; p != NULL; p = p->next)
+        if (strcmp(p->server, server) == 0)
+            return p;
+    return NULL;
+}
+
+
+static const struct DnsProbe *
 preferred_fallback(void) {
     if (fallback_resolver == NULL)
         return NULL;
-    const struct DnsProbe *best = best_fallback_probe();
+    const struct DnsProbe *best = benchmark_preference();
+    if (best == NULL)
+        best = best_fallback_probe();
     return best != NULL ? best : fallback_resolver->probes;
 }
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=Measure SNIProxy fallback DNS through local HTTPS probes
+After=sniproxy-managed.service
+Requisite=sniproxy-managed.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/sniproxy-managed/dns-benchmark.py
+TimeoutStartSec=4min
+Nice=10
