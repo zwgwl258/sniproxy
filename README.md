@@ -1,176 +1,69 @@
-SNI Proxy
-=========
+# SNIProxy 管理面板 + AdGuard Home 融合版
 
-Proxies incoming HTTP and TLS connections based on the hostname contained in
-the initial request of the TCP session. This enables HTTPS name-based virtual
-hosting to separate backend servers without installing the private key on the
-proxy machine.
+通过网页管理 SNIProxy 域名转发、按客户端分流的 DNS 和全局兜底 DNS。安装器默认同时安装 AdGuard Home，登录 SNIProxy 后即可从同一个 HTTPS 面板进入 AdGuard Home，不用另设密码或开 SSH 隧道。
 
-Status: Deprecated
-------------------
-2023-12-13
+## 一键安装 / 升级
 
-When I started this project, there wasn't another proxy that filled this niche.
-Now, there are many proxies available to proxy layer-4 based on the TLS SNI
-extension, including Nginx. Additionally, web traffic is evolving: with HTTP/2,
-multiple hostnames can be multiplexed in a single TCP stream [preventing SNI
-Proxy](https://github.com/dlundquist/sniproxy/issues/178) from routing it
-correctly based on hostname, and HTTP/3 (QUIC) uses UDP transport. SNI Proxy
-just doesn't support these protocols, and adding support for them would
-complicate it significantly. For these reasons, I'm transitioning SNI Proxy to
-a deprecated status.
+**支持 Debian / Ubuntu（systemd，amd64 或 arm64）。** 在服务器上以 **root** 执行。不需要 Git、GitHub 登录或手动上传国家数据库。
 
-Honestly, this has been the case for last several years, and I hadn't published
-anything to that affect. With CVE-2023-25076 it became clear that this
-situation needs to be communicated clearly.
+```bash
+f=$(mktemp) && curl -fLsS 'https://raw.githubusercontent.com/zwgwl258/sniproxy/5000515f51a298ceb2997a0f652a466d22c4b178/install_cmd.sh' -o "$f" && bash "$f"
+```
 
-In some cases, SNI Proxy might be a better fit than a more general purpose
-proxy, so I'm not going to abandon the project completely. I'll still monitor
-issues and email requests; however, unless it is a significant security or
-reliablity issue, don't expect a response.
+此命令固定到已验证的安装版本，不受仓库首页文档更新影响。安装器会校验下载的归档。
+[查看部署和首次改密测试](https://github.com/zwgwl258/sniproxy/actions/runs/41871429767)。
 
-Features
---------
-+ Name-based proxying of HTTPS without decrypting traffic. No keys or
-  certificates required.
-+ Supports both TLS and HTTP protocols.
-+ Supports IPv4, IPv6 and Unix domain sockets for both back-end servers and
-  listeners.
-+ Supports multiple listening sockets per instance.
-+ Supports HAProxy proxy protocol to propagate original source address to
-  back-end servers.
+- **全新安装**：成功后终端会显示面板地址、用户名 `admin` 和初始密码。首次登录必须修改密码（12–128 个字符），然后用新密码重新登录。不要公开安装输出中的密码。
+- **覆盖升级**：运行同一条命令即可保留域名、DNS 规则和已有面板密码，服务可能短暂重启。平时可以从「修改面板密码」更换密码。
+- **旧服务**：若旧的 `sniproxy.service` 正在运行，安装器不会停掉它，也不会启动新版代理抢占端口。已独立初始化的 AdGuard Home 不会被重置或自动迁移到统一登录。
 
-Usage
------
+## 使用面板
 
-    Usage: sniproxy [-c <config>] [-f] [-n <max file descriptor limit>] [-V]
-        -c  configuration file, defaults to /etc/sniproxy.conf
-        -f  run in foreground, do not drop privileges
-        -n  specify file descriptor limit
-        -V  print the version of SNIProxy and exit
+默认访问 `https://服务器公网IP:9443/`。安装器打印的地址可能是内网 IP；远程访问时请使用实际可达地址，并只允许管理员来源访问 TCP 9443。默认是自签名证书；应核对安装时显示的指纹，或用与访问地址匹配的可信证书。具体参数见[部署说明](deploy/README.md)。
 
+| 功能 | 怎么用 |
+| --- | --- |
+| 域名转发 | 全部可管理域名每行一条。直接增、改、删，点「保存域名列表」统一应用。支持批量粘贴域名或 `.*example\.com$ *` 形式的规则。 |
+| 客户端 DNS 分流 | 填来源 IP、CIDR，或搜索选择国家／地区，再填 DNS IP。已添加规则可搜索、翻页、修改和删除。 |
+| 全局兜底 DNS | 最多 6 个 DNS IP，用逗号或空格分隔。客户端专用组未返回可用地址时才尝试；清空并保存可关闭。 |
+| 高级配置 | 修改监听地址、默认 DNS 或自定义转发表。可校验并应用、查看日志、重启及恢复上一版配置。 |
+| AdGuard Home | 点击标题旁的「AdGuard Home 管理」进入同一 HTTPS 地址的 `/adguard/`。融合模式不用填写单独的后台地址。 |
 
-Installation
-------------
+客户端来源以代理实际看到的 TCP 来源 IP 为准。匹配优先级：**IP／网段 → 国家／地区 → 默认 DNS**。安装器会自动下载并校验 [DB-IP Country Lite](https://db-ip.com/db/download/ip-to-country-lite)。兜底只处理 DNS 查询失败，不处理目标网站连接失败。兜底组内超时或服务错误可以重试下一台；`NXDOMAIN` 不保证再查下一台。
 
-For Debian or Fedora based Linux distributions see building packages below.
+## 默认端口和 AdGuard Home 规则
 
-**Prerequisites**
+| 组件 | 全新安装默认值 |
+| --- | --- |
+| SNIProxy HTTPS 管理面板 | TCP `9443` |
+| SNIProxy 流量监听 | 本机 `127.0.0.1:8080`（HTTP）和 `127.0.0.1:8443`（TLS） |
+| AdGuard Home Web 后台 | 本机 `127.0.0.1:3000`，由面板转发 |
+| AdGuard Home DNS | 本机 `127.0.0.1:5353` |
 
-+ Autotools (autoconf, automake, gettext and libtool)
-+ libev4, libpcre2 (or libpcre) and libudns development headers
-+ Perl and cURL for test suite
+远端客户端如果要连接代理，请先在「高级配置」中设置实际监听地址和转发表，再按需放行端口。不要开放公网 AdGuard Home 后台或把 DNS 暴露为公共解析器。
 
-**Install**
+融合版安装会为 AdGuard Home 写入自定义过滤规则：
 
-    ./autogen.sh && ./configure --enable-dns && make check && sudo make install
+```text
+|*^$dnsrewrite=NOERROR;A;你的公网IPv4
+```
 
-**Building Debian/Ubuntu package**
+默认自动检测公网出口 IPv4。如果 NAT 或负载均衡使出口 IP 与客户端实际使用的代理地址不同，可把安装命令最后的 `bash "$f"` 改为 `ADGUARD_PUBLIC_IP=实际公网IPv4 bash "$f"`。脚本不会覆盖指向其他 IP 的现有同类重写。新装时 **AdGuard DNS filter** 和 **AdAway Default Blocklist** 默认关闭，升级不覆盖已有黑名单状态。
 
-This is the preferred installation method on recent Debian based distributions:
+**这是全域名 A 记录重写。不要把这一实例作为 SNIProxy 解析真实后端的上游 DNS，否则可能把流量指回代理自身。** 安装器不会替你切换现有 DNS 规则。
 
-1. Install required packages
+## 常用检查
 
-        sudo apt-get install autotools-dev cdbs debhelper dh-autoreconf dpkg-dev gettext libev-dev libpcre2-dev libudns-dev pkg-config fakeroot devscripts
+```bash
+systemctl is-active sniproxy-panel.service sniproxy-managed.service sniproxy-adguard.service
+journalctl -u sniproxy-panel.service -n 50 --no-pager
+```
 
-2. Build a Debian package
+配置位于 `/etc/sniproxy-managed/`，集成的 AdGuard Home 数据位于 `/opt/sniproxy-adguard/`。升级或迁移前建议备份这两个目录。
 
-        ./autogen.sh && dpkg-buildpackage
+## 更多文档
 
-3. Install the resulting package
-
-        sudo dpkg -i ../sniproxy_<version>_<arch>.deb
-
-**Building Fedora/RedHat package**
-
-This is the preferred installation method for modern Fedora based distributions.
-
-1. Install required packages
-
-        sudo yum install autoconf automake curl gettext-devel libev-devel pcre-devel perl pkgconfig rpm-build udns-devel
-
-2. Build a distribution tarball:
-
-        ./autogen.sh && ./configure --enable-dns && make dist
-
-3. Build a RPM package
-
-        rpmbuild --define "_sourcedir `pwd`" -ba redhat/sniproxy.spec
-
-4. Install resulting RPM
-
-        sudo yum install ../sniproxy-<version>.<arch>.rpm
-
-I've used Scientific Linux 6 a fair amount, but I prefer Debian based
-distributions. RPM builds are tested in Travis-CI on Ubuntu, but not natively.
-This build process may not follow the current Fedora packaging standards, and
-may not even work.
-
-***Building on OS X with Homebrew***
-
-1. install dependencies.
-
-        brew install libev pcre udns autoconf automake gettext libtool
-
-2. Read the warning about gettext and force link it so autogen.sh works. We need the GNU gettext for the macro `AC_LIB_HAVE_LINKFLAGS` which isn't present in the default OS X package.
-
-        brew link --force gettext
-
-3. Make it so
-
-        ./autogen.sh && ./configure --enable-dns && make
-
-OS X support is a best effort, and isn't a primary target platform.
-
-
-Configuration Syntax
---------------------
-
-    user daemon
-
-    pidfile /tmp/sniproxy.pid
-
-    error_log {
-        syslog daemon
-        priority notice
-    }
-
-    listener 127.0.0.1:443 {
-        protocol tls
-        table TableName
-
-        # Specify a server to use if the initial client request doesn't contain
-        # a hostname
-        fallback 192.0.2.5:443
-    }
-
-    table TableName {
-        # Match exact request hostnames
-        example.com 192.0.2.10:4343
-        # If port is not specified the listener port will be used
-        example.net [2001:DB8::1:10]
-        # Or use regular expression to match
-        .*\\.com    [2001:DB8::1:11]:443
-        # Combining regular expression and wildcard will resolve the hostname
-        # client requested and proxy to it
-        .*\\.edu    *:443
-    }
-
-DNS Resolution
---------------
-
-Using hostnames or wildcard entries in the configuration requires sniproxy to
-be built with [UDNS](http://www.corpit.ru/mjt/udns.html). SNIProxy will still
-build without UDNS, but these features will be unavailable.
-
-UDNS uses a single UDP socket for all queries, so it is recommended you use a
-local caching DNS resolver (with a single socket each DNS query is protected by
-spoofing by a single 16 bit query ID, which makes it relatively easy to spoof).
-
-## Client-aware backend DNS
-
-See [Client DNS routing](CLIENT-DNS.md) for per-client IP/CIDR configuration.
-
-## HTTPS administration panel
-
-See [one-command deployment and web management](deploy/README.md).
+- [部署、证书和迁移](deploy/README.md)
+- [客户端 DNS 配置和构建](CLIENT-DNS.md)
+- [原项目说明（英文）](README.upstream.md)
+- [SNIProxy 许可证](COPYING) · [AdGuard Home 上游许可证](vendor/adguardhome/LICENSE.txt)
