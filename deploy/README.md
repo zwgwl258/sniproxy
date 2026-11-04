@@ -3,14 +3,14 @@
 支持使用 systemd 的 Debian / Ubuntu。安装器会编译并安装同一套 SNIProxy 源码，
 同时安装 HTTPS 管理服务；面板是独立进程，不会随代理重启而断开。
 
-在服务器上运行（此仓库是私有的，先为服务器配置可读的 GitHub SSH 密钥；
-这里只用 SSH 拉 Git 代码，**浏览器访问面板不需要 SSH 隧道**）：
+在服务器的 Bash 中运行（无需 Git 或 GitHub 登录）：
 
-```bash
-git clone git@github.com:zwgwl258/sniproxy.git sniproxy-managed && sudo PANEL_HOST=你的公网IP bash sniproxy-managed/deploy/install.sh
-```
+~~~bash
+bash <(curl -fLsS https://raw.githubusercontent.com/zwgwl258/sniproxy/main/install_cmd.sh)
+~~~
 
-把命令里的 `你的公网IP` 换成实际公网 IP 或域名，用于生成证书。打开 **https://服务器IP:9443/**，用户名 `admin`。
+脚本会下载固定版本、校验 SHA-256，再安装代理和面板。若要给证书指定公网 IP 或域名，
+可在命令前加 PANEL_HOST（非必填；需要保留此变量时以 root 执行）。安装后，打开 **https://服务器IP:9443/**，用户名 `admin`。
 密码可用 `sudo cat /etc/sniproxy-managed/panel-password` 获取。
 建议用防火墙限制 9443 只允许管理员 IP，不要开放给所有人。
 默认是自签名证书；先通过可信渠道核对安装时打印的 SHA-256 指纹，再将证书加入信任。
