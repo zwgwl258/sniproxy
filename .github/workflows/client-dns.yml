@@ -21,7 +21,7 @@ jobs:
           curl -fsS --noproxy '*' -o /dev/null http://127.0.0.1:3000/
           sudo test -f /etc/sniproxy-managed/adguard-integrated
           curl -fsS --noproxy '*' http://127.0.0.1:3000/control/filtering/status |
-            python3 -c 'import json,sys; assert "|*^$dnsrewrite=NOERROR;A;8.8.4.4" in json.load(sys.stdin)["user_rules"]'
+            python3 -c 'import json,sys; s=json.load(sys.stdin); assert "|*^$dnsrewrite=NOERROR;A;8.8.4.4" in s["user_rules"]; assert {f["id"]:f["enabled"] for f in s["filters"]} == {1:False,2:False}'
           cert=/etc/sniproxy-managed/panel.crt
           base=https://127.0.0.1:9443/adguard/
           password=$(sudo cat /etc/sniproxy-managed/panel-password)

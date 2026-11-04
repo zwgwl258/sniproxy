@@ -36,6 +36,15 @@ if [[ ! -e $config ]]; then
     cat > "$config.tmp" <<'YAML'
 schema_version: 34
 users: []
+filters:
+  - id: 1
+    enabled: false
+    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt
+    name: AdGuard DNS filter
+  - id: 2
+    enabled: false
+    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_2.txt
+    name: AdAway Default Blocklist
 http:
   address: 127.0.0.1:3000
 dns:
