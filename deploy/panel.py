@@ -419,8 +419,8 @@ def dns_benchmark_status():
                     "<table><thead><tr><th>分组（首个可测速域名）</th><th>本轮通过</th>"
                     "<th>首选兜底 DNS</th><th>选用原因</th></tr></thead><tbody>"
                     + "".join(group_rows) + "</tbody></table>")
-    else:
-        overview = "<p>暂无分组测速结果；以下为逐域名结果。</p>"
+        return overview
+    overview = "<p>暂无分组测速结果；以下为逐域名结果。</p>"
     def metric(value):
         passed, total, ms = value
         return f"{passed}/{total} · {ms:g} ms" if ms is not None else f"{passed}/{total} · —"
