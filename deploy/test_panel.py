@@ -64,6 +64,22 @@ with tempfile.TemporaryDirectory() as directory:
                 restart.side_effect = None
                 assert "已回滚" in request({"action": "rollback", "nonce": panel.NONCE})[1]
                 assert config.read_bytes() == b"old"
+
+                assert 'name="domain"' in request()[1] and 'name="dns"' in request()[1]
+                domain = {"action": "domain", "nonce": panel.NONCE, "domain": "Netflix.ca"}
+                assert "已保存并应用" in request(domain)[1]
+                assert b"^(.*[.])?netflix[.]ca$ *" in config.read_bytes()
+                assert "已存在" in request(domain)[1]
+                domain["domain"] = "www.example.com"
+                assert "已保存并应用" in request(domain)[1]
+                assert config.read_bytes().count(b"table {") == 1
+                dns = {"action": "client_dns", "nonce": panel.NONCE,
+                       "client": "192.0.2.3/24", "dns": "1.1.1.1"}
+                assert "请输入有效" in request(dns)[1]
+                dns.update(client="192.0.2.0/24", dns="1.1.1.1, 9.9.9.9")
+                assert "已保存并应用" in request(dns)[1]
+                assert b"client 192.0.2.0/24" in config.read_bytes()
+                assert b"nameserver 9.9.9.9" in config.read_bytes()
         finally:
             server.shutdown()
             worker.join()

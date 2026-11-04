@@ -2,6 +2,8 @@
 import base64
 import hmac
 import html
+import ipaddress
+import re
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import os
 from pathlib import Path
@@ -78,6 +80,43 @@ def apply(data, rollback=False):
     return "新配置启动失败，已恢复原配置。请查看日志。"
 
 
+def add_domain(config, value):
+    domain = value.strip().rstrip(".").lower()
+    label = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    if len(domain) > 253 or not re.fullmatch(rf"{label}(?:\.{label})+", domain):
+        raise ValueError("请输入有效域名，例如 netflix.ca。")
+    rule = "    ^(.*[.])?" + domain.replace(".", "[.]") + "$ *\n"
+    if rule.strip() in (line.strip() for line in config.splitlines()):
+        raise ValueError("该域名规则已存在。")
+    tables = list(re.finditer(r"(?m)^[ \t]*table[ \t]*\{[^\S\n]*(?:#[^\n]*)?$\n", config))
+    declarations = re.findall(r"(?m)^[ \t]*table(?:[ \t]+|(?=\{))", config)
+    if not declarations:
+        return config.rstrip() + "\n\ntable {\n" + rule + "}\n"
+    if len(tables) != 1:
+        raise ValueError("此配置没有唯一的标准默认转发表，请使用高级配置。")
+    end = re.search(r"(?m)^[ \t]*\}[ \t]*(?:#[^\n]*)?$", config[tables[0].end():])
+    if end is None:
+        raise ValueError("找不到默认转发表结尾，请使用高级配置。")
+    pos = tables[0].end() + end.start()
+    if re.search(r"(?m)^[ \t]*(?:table|listener|listen|resolver)\b",
+                 config[tables[0].end():pos]):
+        raise ValueError("无法安全定位默认转发表，请使用高级配置。")
+    return config[:pos] + rule + config[pos:]
+
+
+def add_client_dns(config, client, dns):
+    try:
+        network = ipaddress.ip_network(client.strip(), strict=True)
+        servers = [ipaddress.ip_address(item) for item in re.split(r"[\s,]+", dns.strip()) if item]
+        if not 1 <= len(servers) <= 6 or any("%" in str(server) for server in servers):
+            raise ValueError
+    except ValueError:
+        raise ValueError("请输入有效来源 IP/CIDR 和 1 至 6 个 DNS IP；网段请填网络地址。") from None
+    nameservers = "".join(f"    nameserver {server}\n" for server in servers)
+    return (config.rstrip() + f"\n\nresolver {{\n    client {network}\n" +
+            nameservers + "    mode ipv4_only\n}\n")
+
+
 class Panel(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -117,13 +156,37 @@ class Panel(BaseHTTPRequestHandler):
 <title>SNIProxy 管理</title><style>
 body{{max-width:960px;margin:2rem auto;padding:0 1rem;font:16px system-ui}}
 textarea{{width:100%;min-height:25rem;box-sizing:border-box;font:14px monospace}}
+section,details{{border:1px solid #ccd5df;border-radius:.6rem;padding:1rem;margin:1rem 0}}
+label{{display:block;margin:.55rem 0 .2rem}}
+input{{width:100%;max-width:34rem;padding:.5rem;box-sizing:border-box}}
+small{{display:block;margin:.25rem 0;color:#435264}}
 button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 </style><h1>SNIProxy 管理</h1><p>代理状态：{status}</p><pre>{message}</pre>
+<section><h2>域名转发</h2>
+<form method="post" action="/">
+<input type="hidden" name="nonce" value="{NONCE}">
+<label for="domain">域名</label>
+<input id="domain" name="domain" placeholder="netflix.ca" required>
+<small>添加到默认转发表，匹配该域名及其子域名。命名转发表请用高级配置。</small>
+<button name="action" value="domain">添加并应用</button></form></section>
+<section><h2>客户端 DNS 分流</h2>
+<form method="post" action="/">
+<input type="hidden" name="nonce" value="{NONCE}">
+<label for="client">客户端来源 IP 或网段</label>
+<input id="client" name="client" placeholder="203.0.113.8 或 203.0.113.0/24" required>
+<label for="dns">DNS 服务器 IP</label>
+<input id="dns" name="dns" placeholder="154.83.83.86, 149.28.158.78" required>
+<small>按代理看到的 TCP 来源 IP 匹配。最长网段前缀优先，同长度取最后添加的规则；未匹配走默认 DNS。</small>
+<button name="action" value="client_dns">添加并应用</button></form></section>
+<details><summary>高级配置：查看、编辑或删除规则</summary>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
 <label for="config">代理配置（DNS 分组、监听端口、域名转发表）</label>
 <textarea id="config" name="config" spellcheck="false">{config}</textarea>
 <button name="action" value="apply">校验、保存并应用</button>
+</form></details>
+<form method="post" action="/">
+<input type="hidden" name="nonce" value="{NONCE}">
 <button name="action" value="restart">重启代理</button>
 <button name="action" value="rollback">恢复上一版</button>
 <button name="action" value="logs">查看最近日志</button>
@@ -151,6 +214,13 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
             if action == "apply":
                 data = form["config"][0].replace("\r\n", "\n").encode()
                 message = apply(data) if data.strip() else "配置不能为空。"
+            elif action in ("domain", "client_dns"):
+                config = CONFIG.read_text(encoding="utf-8")
+                if action == "domain":
+                    updated = add_domain(config, form["domain"][0])
+                else:
+                    updated = add_client_dns(config, form["client"][0], form["dns"][0])
+                message = apply(updated.encode())
             elif action == "rollback":
                 message = apply(BACKUP.read_bytes(), rollback=True) if BACKUP.exists() else "没有可恢复的配置。"
             elif action == "restart":
@@ -162,6 +232,8 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
                 return self.reply(400)
         except KeyError:
             return self.reply(400)
+        except ValueError as error:
+            message = str(error)
         except (OSError, subprocess.TimeoutExpired):
             message = "操作失败或超时，请检查代理状态和日志。"
         self.page(message)
