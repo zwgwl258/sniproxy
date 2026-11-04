@@ -234,8 +234,6 @@ static struct Address *choose_any(struct ResolvQuery *);
 static int
 open_resolver(struct Resolver *resolver, struct ev_loop *loop,
         char **nameservers, char **search, int mode) {
-    if (resolver == &default_resolver && fallback_resolver != NULL)
-        resolver = fallback_resolver;
     struct dns_ctx *ctx = resolver->ctx;
     resolver->loop = loop;
     resolver->mode = mode;
