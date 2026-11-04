@@ -56,10 +56,13 @@ jobs:
       - name: Compile with Debian 11 Autoconf 2.69
         run: |
           docker run --pull=always --rm -v /etc/ssl/certs/ca-certificates.crt:/ci-ca.crt:ro -v "$PWD:/source:ro" debian:11 sh -ec '
-            sed -i "s|http://deb.debian.org|https://deb.debian.org|g" /etc/apt/sources.list
+            # Use one coherent release package set in this disposable container.
+            printf "%s\n" "deb https://deb.debian.org/debian bullseye main" > /etc/apt/sources.list
+            printf "%s\n" "Package: *" "Pin: release n=bullseye" "Pin-Priority: 1001" > /etc/apt/preferences.d/ci-bullseye
             printf "%s\n" "Acquire::https::CaInfo \"/ci-ca.crt\";" "Acquire::https::No-Cache \"true\";" "Acquire::Retries \"3\";" > /etc/apt/apt.conf.d/99ci
             apt-get update
-            apt-get install -y --no-install-recommends build-essential autoconf automake libev-dev libpcre2-dev libudns-dev libmaxminddb-dev dnsutils
+            apt-get -y --allow-downgrades dist-upgrade
+            apt-get install -y --allow-downgrades --no-install-recommends build-essential autoconf automake libev-dev libpcre2-dev libudns-dev libmaxminddb-dev dnsutils
             autoconf --version
             mkdir /build
             cp -a /source/. /build/
