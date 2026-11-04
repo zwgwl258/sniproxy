@@ -88,8 +88,10 @@ with tempfile.TemporaryDirectory() as directory:
                 assert b"client 192.0.2.0/24" in config.read_bytes()
                 assert b"nameserver 9.9.9.9" in config.read_bytes()
                 page = request()[1]
-                assert '<datalist id="country-options">' in page
-                assert '<option value="JP" label="日本 · Japan">' in page
+                assert '<select id="country-options"' in page
+                assert 'id="country-search"' in page
+                assert panel.COUNTRY_SCRIPT in page
+                assert '<option value="JP">JP · 日本 · Japan</option>' in page
                 dns.update(client="jp", dns="1.1.1.1")
                 assert "请先安装国家数据库" in request(dns)[1]
                 (root / "country.mmdb").touch()

@@ -2,6 +2,7 @@
 import base64
 import hmac
 import html
+import hashlib
 import ipaddress
 import re
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -273,9 +274,36 @@ ZA|南非|South Africa
 ZM|赞比亚|Zambia
 ZW|津巴布韦|Zimbabwe"""
 COUNTRY_OPTIONS = "".join(
-    f'<option value="{code}" label="{html.escape(name, quote=True)}"></option>'
+    f'<option value="{code}">{code} · {html.escape(name)}</option>'
     for code, name in ((line[:2], line[3:].replace("|", " · ")) for line in COUNTRIES.splitlines())
 )
+
+
+COUNTRY_SCRIPT = """const picker = document.getElementById("country-picker");
+const search = document.getElementById("country-search");
+const results = document.getElementById("country-options");
+const source = document.getElementById("client");
+const countries = Array.from(results.options);
+search.addEventListener("input", () => {
+    const query = search.value.trim().toLowerCase();
+    results.replaceChildren(...countries.filter(option =>
+        option.textContent.toLowerCase().includes(query)));
+    results.selectedIndex = -1;
+});
+results.addEventListener("change", () => {
+    if (!results.value) return;
+    source.value = results.value;
+    picker.open = false;
+    document.getElementById("dns").focus();
+});
+picker.addEventListener("toggle", () => {
+    if (!picker.open) return;
+    search.value = "";
+    results.replaceChildren(...countries);
+    results.selectedIndex = -1;
+    search.focus();
+});"""
+COUNTRY_SCRIPT_HASH = base64.b64encode(hashlib.sha256(COUNTRY_SCRIPT.encode()).digest()).decode()
 
 
 def command(*args):
@@ -405,7 +433,8 @@ class Panel(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy",
                          "default-src 'none'; style-src 'unsafe-inline'; "
-                         "frame-ancestors 'none'; form-action 'self'; base-uri 'none'")
+                         "frame-ancestors 'none'; form-action 'self'; base-uri 'none'; "
+                         f"script-src 'sha256-{COUNTRY_SCRIPT_HASH}'")
         for key, value in headers.items():
             self.send_header(key.replace("_", "-"), value)
         self.end_headers()
@@ -450,11 +479,16 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
 <label for="client">客户端来源国家／地区、IP 或网段</label>
-<input id="client" name="client" list="country-options" autocomplete="off" placeholder="搜索日本 / Japan / JP，或输入 IP / 网段" required>
-<datalist id="country-options">{COUNTRY_OPTIONS}</datalist>
+<input id="client" name="client" autocomplete="off" placeholder="JP，或输入 IP / 网段" required>
+<details id="country-picker"><summary>选择国家／地区</summary>
+<label for="country-search">搜索国家／地区</label>
+<input id="country-search" type="search" autocomplete="off" placeholder="日本 / Japan / JP">
+<select id="country-options" size="6" aria-label="国家／地区搜索结果"
+        style="display:block;width:100%;max-width:34rem;margin-top:.5rem">{COUNTRY_OPTIONS}</select>
+</details>
 <label for="dns">DNS 服务器 IP</label>
 <input id="dns" name="dns" placeholder="154.83.83.86, 149.28.158.78" required>
-<small>点击输入框选国家／地区，或输入中文名、英文名、两字母代码搜索后选择；也可直接输入 IP 或网段。按代理看到的 TCP 来源 IP 查询本地国家库。优先级：IP／网段 → 国家／地区 → 默认 DNS。 <a href="https://db-ip.com/" rel="noreferrer">IP Geolocation by DB-IP</a></small>
+<small>点击「选择国家／地区」，按中文名、英文名或两字母代码搜索后选择；也可直接输入 IP 或网段。按代理看到的 TCP 来源 IP 查询本地国家库。优先级：IP／网段 → 国家／地区 → 默认 DNS。 <a href="https://db-ip.com/" rel="noreferrer">IP Geolocation by DB-IP</a></small>
 <button name="action" value="client_dns">添加并应用</button></form></section>
 <details><summary>高级配置：查看、编辑或删除规则</summary>
 <form method="post" action="/">
@@ -468,7 +502,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <button name="action" value="restart">重启代理</button>
 <button name="action" value="rollback">恢复上一版</button>
 <button name="action" value="logs">查看最近日志</button>
-</form></html>""")
+</form><script>{COUNTRY_SCRIPT}</script></html>""")
 
     def do_GET(self):
         if self.authorized():
