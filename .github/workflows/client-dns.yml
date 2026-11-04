@@ -56,7 +56,9 @@ jobs:
       - name: Compile with Debian 11 Autoconf 2.69
         run: |
           docker run --pull=always --rm -v "$PWD:/source:ro" debian:11 sh -ec '
-            sed -i "s|http://deb.debian.org/debian-security|http://security.debian.org/debian-security|g" /etc/apt/sources.list
+            # This disposable job checks the Bullseye release toolchain, not security updates.
+            printf "%s\n" "deb http://deb.debian.org/debian bullseye main" > /etc/apt/sources.list
+            rm -f /var/lib/apt/lists/*_Packages* /var/lib/apt/lists/*_InRelease
             apt-get -o Acquire::http::No-Cache=true -o Acquire::Retries=3 update
             apt-get -o Acquire::http::No-Cache=true -o Acquire::Retries=3 install -y build-essential autoconf automake libev-dev libpcre2-dev libudns-dev libmaxminddb-dev dnsutils
             autoconf --version
