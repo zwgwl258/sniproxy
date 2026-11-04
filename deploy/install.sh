@@ -61,6 +61,7 @@ fi
 new_password=0
 if [[ ! -s $state/panel-password ]]; then
     openssl rand -hex 24 > "$state/panel-password"
+    touch "$state/password-change-required"
     new_password=1
 fi
 if [[ -n ${PANEL_CERT:-} ]]; then

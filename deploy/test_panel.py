@@ -27,7 +27,7 @@ with tempfile.TemporaryDirectory() as directory:
         worker = Thread(target=server.serve_forever, daemon=True)
         worker.start()
 
-        def request(form=None, auth=True):
+        def request(form=None, auth=True, follow=True):
             # Trust only the ephemeral test certificate.
             tls = ssl.create_default_context(cafile=str(root / "cert"))
             conn = http.client.HTTPSConnection("localhost", server.server_port,
@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory() as directory:
                              urlencode(form) if form is not None else None, headers)
                 response = conn.getresponse()
                 body = response.read().decode()
-                if form is not None:
+                if form is not None and follow:
                     assert response.status == 303
                     location = response.getheader("Location")
                     conn.request("GET", location, headers=headers)
@@ -154,6 +154,19 @@ with tempfile.TemporaryDirectory() as directory:
                 assert 'href="https://dns.example.com:8443/"' in request()[1]
                 link["url"] = ""
                 assert 'href="#adguard-url"' in request(link)[1]
+                marker = root / "password-change-required"
+                marker.touch()
+                assert "首次登录：修改初始密码" in request()[1]
+                assert "请先修改初始密码" in request(link)[1]
+                password = {"action": "change_password", "nonce": panel.NONCE,
+                            "current_password": "wrong", "new_password": "new-test-password",
+                            "confirm_password": "new-test-password"}
+                assert "当前密码不正确" in request(password)[1] and marker.exists()
+                password["current_password"] = "test"
+                assert request(password, follow=False)[0] == 303
+                assert not marker.exists()
+                assert (root / "panel-password").read_bytes() == b"new-test-password\n"
+                assert "SNIProxy 管理" in request()[1]
         finally:
             server.shutdown()
             worker.join()

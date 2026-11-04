@@ -582,6 +582,9 @@ class Panel(BaseHTTPRequestHandler):
                        WWW_Authenticate='Basic realm="SNIProxy", charset="UTF-8"')
             return False
         if self.path.startswith("/adguard/"):
+            if (ROOT / "password-change-required").is_file():
+                self.reply(303, Location="/")
+                return False
             return True
         if self.path != "/" and not (self.command == "GET" and
                 re.fullmatch(r"/\?result=[A-Za-z0-9_-]{22}", self.path)):
@@ -590,6 +593,24 @@ class Panel(BaseHTTPRequestHandler):
         return True
 
     def page(self, message="", domain_input=None):
+        password_form = f"""
+<form method="post" action="/">
+<input type="hidden" name="nonce" value="{NONCE}">
+<label for="current-password">当前密码</label>
+<input id="current-password" name="current_password" type="password" autocomplete="current-password" required>
+<label for="new-password">新密码</label>
+<input id="new-password" name="new_password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+<label for="confirm-password">确认新密码</label>
+<input id="confirm-password" name="confirm_password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+<button name="action" value="change_password">修改密码</button>
+<small>新密码至少 12 个字符。保存后请用新密码重新登录。</small>
+</form>"""
+        if (ROOT / "password-change-required").is_file():
+            return self.reply(200, f"""<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<title>修改初始密码</title><h1>首次登录：修改初始密码</h1>
+<p>{html.escape(message or "请先修改初始密码，再进入管理面板。")}</p>
+<style>label,input,button{{display:block;margin:.5rem 0}}body{{font:16px system-ui;margin:2rem}}</style>
+{password_form}</html>""")
         address_file = ROOT / "adguard-url"
         adguard_url = html.escape(address_file.read_text(encoding="utf-8").strip(), quote=True) if address_file.is_file() else ""
         integrated = (ROOT / "adguard-integrated").is_file()
@@ -672,6 +693,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <input id="fallback-dns" name="dns" value="{fallback_dns}" placeholder="1.1.1.1, 8.8.8.8">
 <small>客户端专用 DNS 未返回可用地址时才查询。最多 6 个 IP，逗号或空格分隔；清空后保存可关闭。</small>
 <button name="action" value="fallback_dns">保存兜底 DNS</button></form></section>
+<details><summary>修改面板密码</summary>{password_form}</details>
 <details><summary>AdGuard Home 后台地址设置</summary>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
@@ -782,6 +804,8 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
         if not hmac.compare_digest(form.get("nonce", [""])[0].encode(), NONCE.encode()):
             return self.form_result("页面已过期，本次操作未执行。请重新操作。")
         action = form.get("action", [""])[0]
+        if action != "change_password" and (ROOT / "password-change-required").is_file():
+            return self.form_result("请先修改初始密码。")
         try:
             if action == "apply":
                 data = form["config"][0].replace("\r\n", "\n").encode()
@@ -797,6 +821,22 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
                 if dns:
                     config = add_client_dns(config, "", dns, fallback=True)
                 message = apply(config.encode())
+            elif action == "change_password":
+                current = form["current_password"][0]
+                new = form["new_password"][0]
+                confirmation = form["confirm_password"][0]
+                supplied = b"Basic " + base64.b64encode(b"admin:" + current.encode())
+                if not hmac.compare_digest(supplied, self.server.authorization):
+                    raise ValueError("当前密码不正确。")
+                if new != confirmation:
+                    raise ValueError("两次输入的新密码不一致。")
+                if (not 12 <= len(new) <= 128 or new != new.strip() or
+                        not new.isprintable() or new == current):
+                    raise ValueError("新密码须为不同的 12–128 个可打印字符，首尾不能有空白。")
+                atomic_write(ROOT / "panel-password", (new + "\n").encode())
+                self.server.authorization = b"Basic " + base64.b64encode(b"admin:" + new.encode())
+                (ROOT / "password-change-required").unlink(missing_ok=True)
+                message = "密码已修改，请用新密码重新登录。"
             elif action == "adguard_url":
                 url = form["url"][0].strip()
                 if url:

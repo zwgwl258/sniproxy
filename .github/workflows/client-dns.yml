@@ -16,7 +16,9 @@ jobs:
       - run: bash -n deploy/install.sh && python3 deploy/test_panel.py
       - name: Install and verify the systemd services
         run: |
-          sudo ADGUARD_PUBLIC_IP=8.8.4.4 PANEL_BIND=127.0.0.1 PANEL_HOST=127.0.0.1 bash deploy/install.sh
+          set -o pipefail
+          sudo ADGUARD_PUBLIC_IP=8.8.4.4 PANEL_BIND=127.0.0.1 PANEL_HOST=127.0.0.1 bash deploy/install.sh |
+            sed -E 's/^(Initial panel password: ).*/\1[redacted]/'
           sudo systemctl is-active sniproxy-managed.service sniproxy-panel.service sniproxy-adguard.service
           curl -fsS --noproxy '*' -o /dev/null http://127.0.0.1:3000/
           sudo test -f /etc/sniproxy-managed/adguard-integrated
@@ -26,6 +28,17 @@ jobs:
           base=https://127.0.0.1:9443/adguard/
           password=$(sudo cat /etc/sniproxy-managed/panel-password)
           test "$(sudo curl -sS --cacert "$cert" -o /dev/null -w '%{http_code}' "$base")" = 401
+          home=https://127.0.0.1:9443/
+          page=$(sudo curl -fsS --cacert "$cert" --user "admin:$password" "$home")
+          grep -F '首次登录：修改初始密码' <<< "$page"
+          nonce=$(sed -n 's/.*name="nonce" value="\([^"]*\)".*/\1/p' <<< "$page")
+          new_password=$(openssl rand -hex 24)
+          test "$(sudo curl -sS --cacert "$cert" --user "admin:$password" -o /dev/null -w '%{http_code}' \
+            --data-urlencode "nonce=$nonce" --data-urlencode 'action=change_password' \
+            --data-urlencode "current_password=$password" --data-urlencode "new_password=$new_password" \
+            --data-urlencode "confirm_password=$new_password" "$home")" = 303
+          test "$(sudo curl -sS --cacert "$cert" --user "admin:$password" -o /dev/null -w '%{http_code}' "$home")" = 401
+          password=$new_password
           sudo curl -fsS --cacert "$cert" --user "admin:$password" "$base" -o /tmp/adguard-ui.html
           grep -i 'AdGuard Home' /tmp/adguard-ui.html
           sudo curl -fsS --cacert "$cert" --user "admin:$password" "${base}control/status" | python3 -m json.tool
