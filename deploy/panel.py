@@ -310,7 +310,11 @@ ruleSearch.addEventListener("input", () => {
     let count = 0;
     for (const row of ruleRows) {
         row.hidden = !Array.from(row.querySelectorAll("input:not([type=hidden])"))
-            .some(input => input.value.toLowerCase().includes(query));
+            .some(input => {
+                const value = input.value.toLowerCase();
+                return value.includes(query) ||
+                    value.replaceAll(String.fromCharCode(92) + ".", ".").replaceAll("[.]", ".").includes(query);
+            });
         if (!row.hidden) count++;
     }
     document.getElementById("rule-count").textContent = `${count} / ${ruleRows.length}`;
