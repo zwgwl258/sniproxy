@@ -557,6 +557,11 @@ class Panel(BaseHTTPRequestHandler):
         domain_input = html.escape(domain_input)
         current = CONFIG.read_text(encoding="utf-8", errors="replace")
         rules = rule_forms(current)
+        domains = html.escape("\n".join(
+            value.split()[0].removeprefix("^(.*[.])?").removeprefix(".*")
+            .removesuffix("$").replace(r"\.", ".").replace("[.]", ".")
+            for kind, _, _, value, _ in managed_rules(current) if kind == "domain"
+        ))
         config = html.escape(current)
         message = html.escape(message)
         status = "运行中" if active() else "未运行"
@@ -568,7 +573,7 @@ textarea{{width:100%;min-height:25rem;box-sizing:border-box;font:14px monospace}
 section,details{{border:1px solid #ccd5df;border-radius:.6rem;padding:1rem;margin:1rem 0}}
 label{{display:block;margin:.55rem 0 .2rem}}
 input{{width:100%;max-width:34rem;padding:.5rem;box-sizing:border-box}}
-#domain{{display:block;min-height:16rem;resize:vertical;padding:.65rem;line-height:1.5;white-space:pre;overflow:auto}}
+#domain,#saved-domains{{display:block;min-height:16rem;resize:vertical;padding:.65rem;line-height:1.5;white-space:pre;overflow:auto}}
 small{{display:block;margin:.25rem 0;color:#435264}}
 button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 .rule-row{{display:grid;grid-template-columns:5.5rem minmax(0,1fr) auto;align-items:center;gap:.65rem;padding:.5rem 0;border-bottom:1px solid #e4eaf0}}
@@ -585,9 +590,12 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 @media(max-width:640px){{.rule-row{{grid-template-columns:minmax(0,1fr) auto}}.rule-type{{grid-column:1/-1}}.rule-fields{{flex-wrap:wrap}}}}
 </style><h1>SNIProxy 管理</h1><p>代理状态：{status}</p><pre>{message}</pre>
 <section><h2>域名转发</h2>
+<label for="saved-domains">已添加域名（每行一条）</label>
+<textarea id="saved-domains" rows="12" readonly spellcheck="false" placeholder="暂无已添加域名">{domains}</textarea>
+<small>此处显示默认转发表中可由面板管理的全部域名，可滚动、全选和复制。修改或删除请到「已添加规则」。</small>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
-<label for="domain">域名</label>
+<label for="domain">添加域名</label>
 <textarea id="domain" name="domain" rows="12" wrap="off" placeholder="netflix.ca&#10;netflix.com" spellcheck="false" required>{domain_input}</textarea>
 <small>每行一个域名或一条现有的 .*netflix\\.ca$ * 格式规则，可混合粘贴。空行和重复规则会跳过；任何一行无效则整批不保存。命名转发表请用高级配置。</small>
 <button name="action" value="domain">添加并应用</button></form></section>
