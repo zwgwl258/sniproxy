@@ -17,6 +17,16 @@ f=$(mktemp) && curl -fLsS 'https://raw.githubusercontent.com/zwgwl258/sniproxy/5
 - **覆盖升级**：运行同一条命令即可保留域名、DNS 规则和已有面板密码，服务可能短暂重启。平时可以从「修改面板密码」更换密码。
 - **旧服务**：若旧的 `sniproxy.service` 正在运行，安装器不会停掉它，也不会启动新版代理抢占端口。已独立初始化的 AdGuard Home 不会被重置或自动迁移到统一登录。
 
+### Debian 11：Autoconf 2.69
+
+如果日志报 `Autoconf version 2.71 or higher is required`，请改用下面的兼容安装包，不用卸载已安装的依赖：
+
+~~~bash
+f=$(mktemp) && curl -fLsS 'https://raw.githubusercontent.com/zwgwl258/sniproxy/fa4561d8ee466397cf60547f3b722fb8493e9f3c/install_cmd.sh' -o "$f" && bash "$f"
+~~~
+
+[查看 Debian 11 构建验证](https://github.com/zwgwl258/sniproxy/actions/runs/41876223123)。
+
 ## 使用面板
 
 默认访问 `https://服务器公网IP:9443/`。安装器打印的地址可能是内网 IP；远程访问时请使用实际可达地址，并只允许管理员来源访问 TCP 9443。默认是自签名证书；应核对安装时显示的指纹，或用与访问地址匹配的可信证书。具体参数见[部署说明](deploy/README.md)。
