@@ -77,7 +77,8 @@ with tempfile.TemporaryDirectory() as directory:
                 before = config.read_bytes()
                 assert "第 2 行" in request(domain)[1] and config.read_bytes() == before
                 domain["domain"] = "new.example.com\n\n.*nflximg\\.net$ *\n.*nflximg\\.net$ *"
-                assert "已保存并应用" in request(domain)[1]
+                domain_response = request(domain)[1]
+                assert "已保存并应用" in domain_response
                 assert config.read_bytes().count(br".*nflximg\.net$ *") == 1
                 assert b"new[.]example[.]com$ *" in config.read_bytes()
                 dns = {"action": "client_dns", "nonce": panel.NONCE,
@@ -87,7 +88,7 @@ with tempfile.TemporaryDirectory() as directory:
                 assert "已保存并应用" in request(dns)[1]
                 assert b"client 192.0.2.0/24" in config.read_bytes()
                 assert b"nameserver 9.9.9.9" in config.read_bytes()
-                page = request()[1]
+                page = domain_response
                 assert '<select id="country-options"' in page
                 assert 'id="country-search"' in page
                 assert panel.COUNTRY_SCRIPT in page
