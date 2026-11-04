@@ -304,21 +304,38 @@ picker.addEventListener("toggle", () => {
     search.focus();
 });
 const ruleSearch = document.getElementById("rule-search");
+const ruleType = document.getElementById("rule-type-filter");
 const ruleRows = Array.from(document.querySelectorAll(".rule-row"));
-ruleSearch.addEventListener("input", () => {
+const previous = document.getElementById("rule-previous");
+const next = document.getElementById("rule-next");
+const pageSize = 10;
+let page = 0;
+
+function renderRules() {
     const query = ruleSearch.value.trim().toLowerCase();
-    let count = 0;
-    for (const row of ruleRows) {
-        row.hidden = !Array.from(row.querySelectorAll("input:not([type=hidden])"))
-            .some(input => {
-                const value = input.value.toLowerCase();
-                return value.includes(query) ||
-                    value.replaceAll(String.fromCharCode(92) + ".", ".").replaceAll("[.]", ".").includes(query);
-            });
-        if (!row.hidden) count++;
-    }
-    document.getElementById("rule-count").textContent = `${count} / ${ruleRows.length}`;
-});
+    const matches = ruleRows.filter(row =>
+        (!ruleType.value || row.dataset.kind === ruleType.value) &&
+        Array.from(row.querySelectorAll("input:not([type=hidden])")).some(input => {
+            const value = input.value.toLowerCase();
+            return value.includes(query) ||
+                value.replaceAll(String.fromCharCode(92) + ".", ".").replaceAll("[.]", ".").includes(query);
+        }));
+    const pages = Math.max(1, Math.ceil(matches.length / pageSize));
+    page = Math.max(0, Math.min(page, pages - 1));
+    const visible = new Set(matches.slice(page * pageSize, (page + 1) * pageSize));
+    for (const row of ruleRows) row.hidden = !visible.has(row);
+    previous.disabled = page === 0;
+    next.disabled = page >= pages - 1;
+    document.getElementById("rule-count").textContent = matches.length
+        ? `第 ${page + 1} / ${pages} 页 · ${matches.length} 条匹配`
+        : "没有匹配规则";
+}
+
+ruleSearch.addEventListener("input", () => { page = 0; renderRules(); });
+ruleType.addEventListener("change", () => { page = 0; renderRules(); });
+previous.addEventListener("click", () => { page--; renderRules(); });
+next.addEventListener("click", () => { page++; renderRules(); });
+renderRules();
 for (const row of ruleRows) {
     row.addEventListener("submit", event => {
         if (event.submitter?.value === "delete_rule" && !window.confirm("确定删除这条规则？")) {
@@ -494,7 +511,7 @@ def rule_forms(config):
         label = "域名" if kind == "domain" else "客户端 DNS"
         dns_field = (f'<input name="dns" aria-label="DNS 服务器 IP" value="{html.escape(dns, quote=True)}" required>'
                      if kind == "dns" else "")
-        forms.append(f"""<form class="rule-row" method="post" action="/">
+        forms.append(f"""<form class="rule-row" data-kind="{kind}" method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
 <input type="hidden" name="rule" value="{revision}:{index}">
 <span class="rule-type">{label}</span>
@@ -562,6 +579,8 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 .rule-actions button{{margin:0;white-space:nowrap;padding:.4rem .55rem}}
 .rule-actions button[value=delete_rule]{{color:#a12626}}
 .rule-type{{color:#435264;font-size:.875rem}}
+.rule-toolbar{{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}}
+.rule-toolbar select{{padding:.5rem}}
 #rule-count{{color:#435264}}
 @media(max-width:640px){{.rule-row{{grid-template-columns:minmax(0,1fr) auto}}.rule-type{{grid-column:1/-1}}.rule-fields{{flex-wrap:wrap}}}}
 </style><h1>SNIProxy 管理</h1><p>代理状态：{status}</p><pre>{message}</pre>
@@ -589,8 +608,17 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <button name="action" value="client_dns">添加并应用</button></form></section>
 <details id="saved-rules" {"open" if rules_open else ""}><summary>已添加规则：修改或删除</summary>
 <label for="rule-search">搜索已添加规则</label>
+<div class="rule-toolbar">
 <input id="rule-search" type="search" placeholder="搜索域名、来源或 DNS" autocomplete="off">
-<span id="rule-count" aria-live="polite"></span>{rules}</details>
+<select id="rule-type-filter" aria-label="规则类型">
+<option value="">全部规则</option><option value="domain">仅域名</option><option value="dns">仅客户端 DNS</option>
+</select>
+</div>
+<nav class="rule-toolbar" aria-label="规则分页">
+<button id="rule-previous" type="button">上一页</button>
+<button id="rule-next" type="button">下一页</button>
+<span id="rule-count" aria-live="polite"></span>
+</nav>{rules}</details>
 <details><summary>高级配置：查看、编辑或删除规则</summary>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
