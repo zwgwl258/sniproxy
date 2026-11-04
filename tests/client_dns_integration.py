@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import os
 import socket
 import struct
 import subprocess
@@ -59,6 +60,23 @@ def main(binary):
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
+    country = ""
+    cases = [("127.0.0.2", "127.0.0.11"),
+             ("127.0.0.3", "127.0.0.10"),
+             ("127.0.0.9", "127.0.0.10")]
+    if os.environ.get("SNIPROXY_COUNTRY_DB"):
+        country = """resolver {
+    client GB
+    nameserver 127.0.0.61
+    mode ipv4_only
+}
+resolver {
+    client 81.2.69.161
+    nameserver 127.0.0.60
+    mode ipv4_only
+}
+"""
+        cases += [("81.2.69.160", "127.0.0.11"), ("81.2.69.161", "127.0.0.10")]
     with tempfile.TemporaryDirectory() as tmp:
         config = Path(tmp) / "sniproxy.conf"
         config.write_text(f"""resolver {{
@@ -75,7 +93,7 @@ resolver {{
     nameserver 127.0.0.60
     mode ipv4_only
 }}
-listener 127.0.0.1:{port} {{
+{country}listener 127.0.0.1:{port} {{
     proto http
 }}
 table {{
@@ -95,9 +113,7 @@ table {{
             else:
                 raise RuntimeError("SNIProxy did not start listening")
 
-            cases = [("127.0.0.2", "127.0.0.11"),
-                     ("127.0.0.3", "127.0.0.10"),
-                     ("127.0.0.9", "127.0.0.10")] * 4
+            cases *= 4
             with ThreadPoolExecutor(max_workers=6) as pool:
                 actual = list(pool.map(lambda case: request(port, case[0]), cases))
             expected = [case[1] for case in cases]

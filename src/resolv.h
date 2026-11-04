@@ -31,6 +31,8 @@
 struct ResolvQuery;
 
 struct sockaddr_storage;
+int resolv_is_country(const char *);
+int resolv_open_country_db(const char *);
 int parse_client_cidr(const char *, unsigned char *, unsigned int *);
 int resolv_add_client(struct ev_loop *, const char *, char **, char **, int);
 struct ResolvQuery *resolv_query_client(const char *, int,

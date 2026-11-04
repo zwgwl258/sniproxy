@@ -35,11 +35,20 @@
 #include <errno.h>
 #ifdef HAVE_LIBUDNS
 #include <udns.h>
+#ifdef HAVE_LIBMAXMINDDB
+#include <maxminddb.h>
+#endif
 #endif
 #include "resolv.h"
 #include "address.h"
 #include "logger.h"
 
+
+int
+resolv_is_country(const char *value) {
+    return strlen(value) == 2 && value[0] >= 'A' && value[0] <= 'Z' &&
+            value[1] >= 'A' && value[1] <= 'Z';
+}
 
 int
 parse_client_cidr(const char *cidr, unsigned char *network, unsigned int *prefix) {
@@ -74,6 +83,15 @@ resolv_query(const char *hostname, int mode,
         void (*cb)(struct Address *, void *), void (*free_cb)(void *), void *data) {
     return resolv_query_client(hostname, mode, NULL, cb, free_cb, data);
 }
+
+#if !defined(HAVE_LIBUDNS) || !defined(HAVE_LIBMAXMINDDB)
+int
+resolv_open_country_db(const char *path) {
+    (void)path;
+    err("Country rules require a build with libudns and libmaxminddb");
+    return -1;
+}
+#endif
 
 #ifndef HAVE_LIBUDNS
 int
@@ -150,6 +168,7 @@ struct Resolver {
     ev_timer timer;
     struct Resolver *next;
     unsigned char network[16];
+    char country[2];
     int family;
     unsigned int prefix;
     int mode;
@@ -157,6 +176,43 @@ struct Resolver {
 
 static struct Resolver default_resolver;
 static struct Resolver *client_resolvers;
+#ifdef HAVE_LIBMAXMINDDB
+static MMDB_s country_db;
+static int country_db_open;
+
+int
+resolv_open_country_db(const char *path) {
+    int status = MMDB_open(path, MMDB_MODE_MMAP, &country_db);
+    if (status != MMDB_SUCCESS) {
+        err("Cannot open country database %s: %s", path, MMDB_strerror(status));
+        return -1;
+    }
+    country_db_open = 1;
+    return 0;
+}
+
+static struct Resolver *
+select_country_resolver(const struct sockaddr_storage *peer) {
+    if (!country_db_open)
+        return &default_resolver;
+    int status;
+    MMDB_lookup_result_s result =
+        MMDB_lookup_sockaddr(&country_db, (const struct sockaddr *)peer, &status);
+    if (status != MMDB_SUCCESS || !result.found_entry)
+        return &default_resolver;
+
+    MMDB_entry_data_s value;
+    status = MMDB_get_value(&result.entry, &value, "country", "iso_code", NULL);
+    if (status != MMDB_SUCCESS || !value.has_data ||
+            value.type != MMDB_DATA_TYPE_UTF8_STRING || value.data_size != 2)
+        return &default_resolver;
+
+    for (struct Resolver *r = client_resolvers; r != NULL; r = r->next)
+        if (r->country[0] && memcmp(r->country, value.utf8_string, 2) == 0)
+            return r;
+    return &default_resolver;
+}
+#endif
 
 
 static void resolv_sock_cb(struct ev_loop *, struct ev_io *, int);
@@ -226,8 +282,12 @@ resolv_add_client(struct ev_loop *loop, const char *cidr, char **nameservers,
     struct Resolver *resolver = calloc(1, sizeof(*resolver));
     if (resolver == NULL)
         return -1;
-    resolver->family = parse_client_cidr(cidr, resolver->network, &resolver->prefix);
-    if (!resolver->family || (resolver->ctx = dns_new(NULL)) == NULL) {
+    if (resolv_is_country(cidr))
+        memcpy(resolver->country, cidr, 2);
+    else
+        resolver->family = parse_client_cidr(cidr, resolver->network, &resolver->prefix);
+    if ((!resolver->family && !resolver->country[0]) ||
+            (resolver->ctx = dns_new(NULL)) == NULL) {
         free(resolver);
         return -1;
     }
@@ -254,6 +314,12 @@ resolv_shutdown(struct ev_loop *loop) {
         free(resolver);
     }
     close_resolver(&default_resolver, loop);
+#ifdef HAVE_LIBMAXMINDDB
+    if (country_db_open) {
+        MMDB_close(&country_db);
+        country_db_open = 0;
+    }
+#endif
 }
 
 static struct Resolver *
@@ -283,6 +349,10 @@ select_resolver(const struct sockaddr_storage *peer) {
                 (!bits || ((ip[bytes] ^ r->network[bytes]) >> (8 - bits)) == 0))
             best = r;
     }
+#ifdef HAVE_LIBMAXMINDDB
+    if (best == &default_resolver)
+        return select_country_resolver(peer);
+#endif
     return best;
 }
 

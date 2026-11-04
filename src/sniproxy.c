@@ -118,6 +118,15 @@ main(int argc, char **argv) {
 
     init_listeners(&config->listeners, &config->tables, EV_DEFAULT);
 
+    for (struct ResolverConfig *r = config->client_resolvers; r != NULL; r = r->next) {
+        if (resolv_is_country(r->client)) {
+            const char *path = getenv("SNIPROXY_COUNTRY_DB");
+            if (resolv_open_country_db(path ? path : "/etc/sniproxy-managed/country.mmdb") < 0)
+                fatal("Country DNS routing requires a readable country MMDB");
+            break;
+        }
+    }
+
     /* Drop permissions only when we can */
     drop_perms(config->user ? config->user : default_username, config->group);
 

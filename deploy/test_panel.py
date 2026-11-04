@@ -87,6 +87,11 @@ with tempfile.TemporaryDirectory() as directory:
                 assert "已保存并应用" in request(dns)[1]
                 assert b"client 192.0.2.0/24" in config.read_bytes()
                 assert b"nameserver 9.9.9.9" in config.read_bytes()
+                dns.update(client="jp", dns="1.1.1.1")
+                assert "请先安装国家数据库" in request(dns)[1]
+                (root / "country.mmdb").touch()
+                assert "已保存并应用" in request(dns)[1]
+                assert b"client JP" in config.read_bytes()
         finally:
             server.shutdown()
             worker.join()

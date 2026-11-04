@@ -46,3 +46,16 @@ sudo systemctl enable sniproxy-managed.service
 更新：在克隆目录执行 `git pull --ff-only`，再运行安装脚本。
 重复执行保留面板密码和已保存配置，可能短暂重启代理与面板。
 回切到旧服务时，先停止并禁用 `sniproxy-managed.service`，再启动原服务。
+
+## 按客户端来源国家／地区指定 DNS
+
+准备支持 country.iso_code 字段的国家 MMDB（例如 GeoLite2 Country），将解压后的文件上传到服务器：
+
+~~~sh
+sudo install -m 0600 /tmp/GeoLite2-Country.mmdb /etc/sniproxy-managed/country.mmdb
+~~~
+
+随后在面板「客户端 DNS 分流」填 JP、US、HK 等两字母代码，再填 DNS 并应用。
+按代理看到的 TCP 来源 IP 查询本地库，不根据域名或浏览器语言判断。
+IP／CIDR 优先于国家；未识别或没有规则的来源用默认 DNS。
+数据库由管理员更新，替换后在面板重启代理即可生效。不要用测试数据库部署生产服务。

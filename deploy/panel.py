@@ -118,14 +118,22 @@ def add_domain(config, value):
 
 def add_client_dns(config, client, dns):
     try:
-        network = ipaddress.ip_network(client.strip(), strict=True)
+        source = client.strip()
+        if re.fullmatch(r"[A-Za-z]{2}", source):
+            source = source.upper()
+            if not (ROOT / "country.mmdb").is_file():
+                raise ValueError("missing-country-db")
+        else:
+            source = str(ipaddress.ip_network(source, strict=True))
         servers = [ipaddress.ip_address(item) for item in re.split(r"[\s,]+", dns.strip()) if item]
         if not 1 <= len(servers) <= 6 or any("%" in str(server) for server in servers):
             raise ValueError
-    except ValueError:
-        raise ValueError("请输入有效来源 IP/CIDR 和 1 至 6 个 DNS IP；网段请填网络地址。") from None
+    except ValueError as error:
+        if str(error) == "missing-country-db":
+            raise ValueError("请先安装国家数据库 /etc/sniproxy-managed/country.mmdb。") from None
+        raise ValueError("请输入两字母国家/地区代码、有效 IP 或网段，以及 1 至 6 个 DNS IP。") from None
     nameservers = "".join(f"    nameserver {server}\n" for server in servers)
-    return (config.rstrip() + f"\n\nresolver {{\n    client {network}\n" +
+    return (config.rstrip() + f"\n\nresolver {{\n    client {source}\n" +
             nameservers + "    mode ipv4_only\n}\n")
 
 
@@ -186,11 +194,11 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <section><h2>客户端 DNS 分流</h2>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
-<label for="client">客户端来源 IP 或网段</label>
-<input id="client" name="client" placeholder="203.0.113.8 或 203.0.113.0/24" required>
+<label for="client">客户端来源国家／地区、IP 或网段</label>
+<input id="client" name="client" placeholder="JP、US、HK，或 203.0.113.0/24" required>
 <label for="dns">DNS 服务器 IP</label>
 <input id="dns" name="dns" placeholder="154.83.83.86, 149.28.158.78" required>
-<small>按代理看到的 TCP 来源 IP 匹配。最长网段前缀优先，同长度取最后添加的规则；未匹配走默认 DNS。</small>
+<small>填写两字母国家／地区代码（如 JP）。按代理看到的 TCP 来源 IP 查询本地国家库。优先级：IP／网段 → 国家／地区 → 默认 DNS。</small>
 <button name="action" value="client_dns">添加并应用</button></form></section>
 <details><summary>高级配置：查看、编辑或删除规则</summary>
 <form method="post" action="/">

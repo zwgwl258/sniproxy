@@ -5,9 +5,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y build-essential autoconf automake libev-dev libpcre2-dev libudns-dev
+      - run: sudo apt-get update && sudo apt-get install -y build-essential autoconf automake libev-dev libpcre2-dev libudns-dev libmaxminddb-dev
       - run: autoreconf -fi && ./configure --enable-dns && make -j2
-      - run: sudo python3 tests/client_dns_integration.py ./src/sniproxy
+      - name: Test CIDR and country DNS routing
+        run: |
+          curl -fLsS https://raw.githubusercontent.com/maxmind/MaxMind-DB/55f9b2727fd5ab22ce175b475afbcd44c64dd009/test-data/GeoIP2-Country-Test.mmdb -o /tmp/test-country.mmdb
+          sudo ip addr add 81.2.69.160/32 dev lo
+          sudo ip addr add 81.2.69.161/32 dev lo
+          sudo SNIPROXY_COUNTRY_DB=/tmp/test-country.mmdb python3 tests/client_dns_integration.py ./src/sniproxy
       - run: bash -n deploy/install.sh && python3 deploy/test_panel.py
       - name: Install and verify the systemd services
         run: |

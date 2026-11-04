@@ -25,7 +25,8 @@ AC_ARG_ENABLE([dns],
 AM_CONDITIONAL([DNS_ENABLED], [test "$enable_dns"])
 
 AS_IF([test "$enable_dns"],
-      [AC_CHECK_LIB([udns], [dns_init])])
+      [AC_CHECK_LIB([udns], [dns_init])
+       AC_CHECK_LIB([maxminddb], [MMDB_open])])
 
 AC_ARG_ENABLE([rfc3339-timestamps],
   [AS_HELP_STRING([--enable-rfc3339-timestamps], [Enable RFC3339 timestamps])],
