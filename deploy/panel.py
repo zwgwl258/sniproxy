@@ -130,7 +130,7 @@ def add_client_dns(config, client, dns):
             raise ValueError
     except ValueError as error:
         if str(error) == "missing-country-db":
-            raise ValueError("请先安装国家数据库 /etc/sniproxy-managed/country.mmdb。") from None
+            raise ValueError("请先安装国家数据库：重新运行一键安装脚本，或手动放到 /etc/sniproxy-managed/country.mmdb。") from None
         raise ValueError("请输入两字母国家/地区代码、有效 IP 或网段，以及 1 至 6 个 DNS IP。") from None
     nameservers = "".join(f"    nameserver {server}\n" for server in servers)
     return (config.rstrip() + f"\n\nresolver {{\n    client {source}\n" +
@@ -198,7 +198,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <input id="client" name="client" placeholder="JP、US、HK，或 203.0.113.0/24" required>
 <label for="dns">DNS 服务器 IP</label>
 <input id="dns" name="dns" placeholder="154.83.83.86, 149.28.158.78" required>
-<small>填写两字母国家／地区代码（如 JP）。按代理看到的 TCP 来源 IP 查询本地国家库。优先级：IP／网段 → 国家／地区 → 默认 DNS。</small>
+<small>填写两字母国家／地区代码（如 JP）。按代理看到的 TCP 来源 IP 查询本地国家库。优先级：IP／网段 → 国家／地区 → 默认 DNS。 <a href="https://db-ip.com/" rel="noreferrer">IP Geolocation by DB-IP</a></small>
 <button name="action" value="client_dns">添加并应用</button></form></section>
 <details><summary>高级配置：查看、编辑或删除规则</summary>
 <form method="post" action="/">
