@@ -81,13 +81,25 @@ def apply(data, rollback=False):
 
 
 def add_domain(config, value):
-    domain = value.strip().rstrip(".").lower()
     label = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-    if len(domain) > 253 or not re.fullmatch(rf"{label}(?:\.{label})+", domain):
-        raise ValueError("请输入有效域名，例如 netflix.ca。")
-    rule = "    ^(.*[.])?" + domain.replace(".", "[.]") + "$ *\n"
-    if rule.strip() in (line.strip() for line in config.splitlines()):
-        raise ValueError("该域名规则已存在。")
+    existing = {" ".join(line.split()) for line in config.splitlines()}
+    rules = []
+    for number, line in enumerate(value.splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        legacy = re.fullmatch(r"\.\*([a-zA-Z0-9-]+(?:\\\.[a-zA-Z0-9-]+)+)\$[ \t]+\*", line)
+        domain = (legacy[1].replace(r"\.", ".") if legacy else line.rstrip(".")).lower()
+        if len(domain) > 253 or not re.fullmatch(rf"{label}(?:\.{label})+", domain):
+            raise ValueError(f"第 {number} 行格式无效；请填域名或 .*netflix\\.ca$ * 形式的规则。整批未保存。")
+        entry = (".*" + legacy[1] + "$ *" if legacy else
+                 "^(.*[.])?" + domain.replace(".", "[.]") + "$ *")
+        if entry not in existing:
+            existing.add(entry)
+            rules.append("    " + entry + "\n")
+    if not rules:
+        raise ValueError("没有可添加的规则：输入为空或规则已存在。")
+    rule = "".join(rules)
     tables = list(re.finditer(r"(?m)^[ \t]*table[ \t]*\{[^\S\n]*(?:#[^\n]*)?$\n", config))
     declarations = re.findall(r"(?m)^[ \t]*table(?:[ \t]+|(?=\{))", config)
     if not declarations:
@@ -166,8 +178,8 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
 <label for="domain">域名</label>
-<input id="domain" name="domain" placeholder="netflix.ca" required>
-<small>添加到默认转发表，匹配该域名及其子域名。命名转发表请用高级配置。</small>
+<textarea id="domain" name="domain" rows="8" style="min-height:8rem" placeholder="netflix.ca&#10;netflix.com" spellcheck="false" required></textarea>
+<small>每行一个域名或一条现有的 .*netflix\\.ca$ * 格式规则，可混合粘贴。空行和重复规则会跳过；任何一行无效则整批不保存。命名转发表请用高级配置。</small>
 <button name="action" value="domain">添加并应用</button></form></section>
 <section><h2>客户端 DNS 分流</h2>
 <form method="post" action="/">

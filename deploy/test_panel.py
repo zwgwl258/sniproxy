@@ -73,6 +73,13 @@ with tempfile.TemporaryDirectory() as directory:
                 domain["domain"] = "www.example.com"
                 assert "已保存并应用" in request(domain)[1]
                 assert config.read_bytes().count(b"table {") == 1
+                domain["domain"] = "new.example.com\ninvalid line"
+                before = config.read_bytes()
+                assert "第 2 行" in request(domain)[1] and config.read_bytes() == before
+                domain["domain"] = "new.example.com\n\n.*nflximg\\.net$ *\n.*nflximg\\.net$ *"
+                assert "已保存并应用" in request(domain)[1]
+                assert config.read_bytes().count(b".*nflximg\\\\.net$ *") == 1
+                assert b"new[.]example[.]com$ *" in config.read_bytes()
                 dns = {"action": "client_dns", "nonce": panel.NONCE,
                        "client": "192.0.2.3/24", "dns": "1.1.1.1"}
                 assert "请输入有效" in request(dns)[1]
