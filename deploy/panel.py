@@ -707,7 +707,7 @@ class Panel(BaseHTTPRequestHandler):
         fallback_dns = html.escape(next((dns for kind, _, _, source, dns in
             reversed(list(managed_rules(current))) if kind == "dns" and source == "fallback"), "").replace(", ", "\n"), quote=True)
         domains = html.escape(domain_input if domain_input is not None else "\n".join(
-            domain_name(value) for kind, _, _, value, _ in managed_rules(current) if kind == "domain"
+            value for kind, _, _, value, _ in managed_rules(current) if kind == "domain"
         ))
         config = html.escape(current)
         message = html.escape(message)
@@ -746,8 +746,8 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
 <input type="hidden" name="revision" value="{rule_revision(current)}">
-<label for="saved-domains">域名列表（每行一条）</label>
-<textarea id="saved-domains" name="domain" rows="12" spellcheck="false" placeholder="netflix.ca&#10;netflix.com">{domains}</textarea>
+<label for="saved-domains">域名列表（原版规则，每行一条）</label>
+<textarea id="saved-domains" name="domain" rows="12" spellcheck="false" placeholder=".*netflix&#92;.ca$ *&#10;.*netflix&#92;.com$ *">{domains}</textarea>
 <small>每行填写一个域名或一条以 * 为转发目标的原版 SNIProxy 正则规则。支持批量粘贴、修改、删除；其他转发目标不受影响。</small>
 <button name="action" value="save_domains">保存域名列表</button></form></section>
 <section><h2>客户端 DNS 分流</h2>
