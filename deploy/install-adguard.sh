@@ -58,6 +58,50 @@ fi
 
 systemctl is-active --quiet "$unit"
 
+if [[ -f $marker ]]; then
+    public_ip=${ADGUARD_PUBLIC_IP:-}
+    if [[ -z $public_ip ]]; then
+        public_ip=$(curl -4 -fLsS --noproxy '*' --proto '=https' --connect-timeout 5 \
+            --max-time 10 https://checkip.amazonaws.com/)
+    fi
+    python3 - "$public_ip" <<'PYTHON'
+import ipaddress
+import json
+import sys
+from http.client import HTTPConnection
+
+try:
+    address = ipaddress.IPv4Address(sys.argv[1].strip())
+    if not address.is_global or address.is_multicast or address.is_reserved:
+        raise ValueError
+except ValueError:
+    sys.exit("No valid public IPv4. Re-run with ADGUARD_PUBLIC_IP set to the server public IPv4.")
+
+prefix = "|*^$dnsrewrite=NOERROR;A;"
+rule = prefix + str(address)
+
+def request(method, path, payload=None):
+    conn = HTTPConnection("127.0.0.1", 3000, timeout=10)
+    try:
+        conn.request(method, "/control/filtering/" + path,
+                     body=json.dumps(payload) if payload is not None else None,
+                     headers={"Content-Type": "application/json"})
+        response = conn.getresponse()
+        if response.status != 200:
+            sys.exit(f"AdGuard Home filtering API returned HTTP {response.status}.")
+        return response.read()
+    finally:
+        conn.close()
+
+rules = json.loads(request("GET", "status"))["user_rules"] or []
+if any(item.strip().startswith(prefix) and item.strip() != rule for item in rules):
+    sys.exit("An existing wildcard A rewrite uses a different IP; not overwritten.")
+if not any(item.strip() == rule for item in rules):
+    request("POST", "set_rules", {"rules": [*rules, rule]})
+print(f"AdGuard Home wildcard A rewrite: {address}")
+PYTHON
+fi
+
 url=/etc/sniproxy-managed/adguard-url
 if [[ ! -e $url && ! -e $marker ]]; then
     printf 'http://127.0.0.1:3000/\n' > "$url"

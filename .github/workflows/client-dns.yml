@@ -16,10 +16,12 @@ jobs:
       - run: bash -n deploy/install.sh && python3 deploy/test_panel.py
       - name: Install and verify the systemd services
         run: |
-          sudo PANEL_BIND=127.0.0.1 PANEL_HOST=127.0.0.1 bash deploy/install.sh
+          sudo ADGUARD_PUBLIC_IP=8.8.4.4 PANEL_BIND=127.0.0.1 PANEL_HOST=127.0.0.1 bash deploy/install.sh
           sudo systemctl is-active sniproxy-managed.service sniproxy-panel.service sniproxy-adguard.service
           curl -fsS --noproxy '*' -o /dev/null http://127.0.0.1:3000/
           sudo test -f /etc/sniproxy-managed/adguard-integrated
+          curl -fsS --noproxy '*' http://127.0.0.1:3000/control/filtering/status |
+            python3 -c 'import json,sys; assert "|*^$dnsrewrite=NOERROR;A;8.8.4.4" in json.load(sys.stdin)["user_rules"]'
           cert=/etc/sniproxy-managed/panel.crt
           base=https://127.0.0.1:9443/adguard/
           password=$(sudo cat /etc/sniproxy-managed/panel-password)
