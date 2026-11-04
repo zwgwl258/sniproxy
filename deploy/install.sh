@@ -10,6 +10,9 @@ state=/etc/sniproxy-managed
 lib=/usr/local/lib/sniproxy-managed
 port=${PANEL_PORT:-9443}
 bind=${PANEL_BIND:-0.0.0.0}
+host=${PANEL_HOST:-$(hostname -I | awk '{print $1}')}
+host=${host:-127.0.0.1}
+[[ $host =~ ^[a-zA-Z0-9][a-zA-Z0-9.:-]*$ ]] || { echo "Invalid PANEL_HOST" >&2; exit 1; }
 [[ $port =~ ^[1-9][0-9]{0,4}$ && $port -le 65535 ]] || { echo "Invalid PANEL_PORT" >&2; exit 1; }
 [[ $bind =~ ^[0-9.]+$ ]] || { echo "PANEL_BIND must be an IPv4 address" >&2; exit 1; }
 if [[ -n ${PANEL_CERT:-} || -n ${PANEL_KEY:-} ]]; then
@@ -38,7 +41,12 @@ if [[ -n ${PANEL_CERT:-} ]]; then
     install -m 0600 "$PANEL_CERT" "$state/panel.crt"
     install -m 0600 "$PANEL_KEY" "$state/panel.key"
 elif [[ ! -s $state/panel.crt || ! -s $state/panel.key ]]; then
-    openssl req -x509 -newkey rsa:3072 -nodes -days 365 -subj /CN=sniproxy-panel \
+    if [[ $host =~ ^[0-9.]+$ || $host == *:* ]]; then
+        san="IP:$host"
+    else
+        san="DNS:$host"
+    fi
+    openssl req -x509 -newkey rsa:3072 -nodes -days 365 -subj /CN=sniproxy-panel -addext "subjectAltName=$san" \
         -keyout "$state/panel.key" -out "$state/panel.crt"
 fi
 if [[ ! -f $state/panel.env || -v PANEL_BIND || -v PANEL_PORT ]]; then
@@ -54,11 +62,13 @@ if systemctl is-active --quiet sniproxy.service; then
     echo "Existing sniproxy.service left running; cut over before starting managed proxy."
 else
     systemctl enable sniproxy-managed.service
-    if ! systemctl restart sniproxy-managed.service; then
+    if ! systemctl restart sniproxy-managed.service || ! (sleep 1; systemctl is-active --quiet sniproxy-managed.service); then
         echo "Proxy did not start; review its configuration in the panel." >&2
     fi
 fi
 # This file is generated above and readable only by root.
 . "$state/panel.env"
-printf '\nPanel: https://SERVER_IP:%s/ (bind: %s)\nUser: admin\nPassword: sudo cat %s/panel-password\n' "$PANEL_PORT" "$PANEL_BIND" "$state"
+url_host=$host
+[[ $host != *:* ]] || url_host="[$host]"
+printf '\nPanel: https://%s:%s/ (bind: %s)\nUser: admin\nPassword: sudo cat %s/panel-password\n' "$url_host" "$PANEL_PORT" "$PANEL_BIND" "$state"
 openssl x509 -in "$state/panel.crt" -noout -fingerprint -sha256

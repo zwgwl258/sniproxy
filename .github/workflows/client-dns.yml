@@ -9,3 +9,10 @@ jobs:
       - run: autoreconf -fi && ./configure --enable-dns && make -j2
       - run: sudo python3 tests/client_dns_integration.py ./src/sniproxy
       - run: bash -n deploy/install.sh && python3 deploy/test_panel.py
+      - name: Install and verify the systemd services
+        run: |
+          sudo PANEL_BIND=127.0.0.1 PANEL_HOST=127.0.0.1 bash deploy/install.sh
+          sudo systemctl is-active sniproxy-managed.service sniproxy-panel.service
+          password=$(sudo cat /etc/sniproxy-managed/panel-password)
+          sudo curl --fail --silent --show-error --cacert /etc/sniproxy-managed/panel.crt \
+            --user "admin:$password" https://127.0.0.1:9443/ | grep -q 'SNIProxy 管理'

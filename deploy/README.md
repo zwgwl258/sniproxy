@@ -7,10 +7,10 @@
 这里只用 SSH 拉 Git 代码，**浏览器访问面板不需要 SSH 隧道**）：
 
 ```bash
-git clone git@github.com:zwgwl258/sniproxy.git sniproxy-managed && sudo bash sniproxy-managed/deploy/install.sh
+git clone git@github.com:zwgwl258/sniproxy.git sniproxy-managed && sudo PANEL_HOST=你的公网IP bash sniproxy-managed/deploy/install.sh
 ```
 
-打开 **https://服务器IP:9443/**，用户名 `admin`。
+把命令里的 `你的公网IP` 换成实际公网 IP 或域名，用于生成证书。打开 **https://服务器IP:9443/**，用户名 `admin`。
 密码可用 `sudo cat /etc/sniproxy-managed/panel-password` 获取。
 建议用防火墙限制 9443 只允许管理员 IP，不要开放给所有人。
 默认是自签名证书；先通过可信渠道核对安装时打印的 SHA-256 指纹，再将证书加入信任。
