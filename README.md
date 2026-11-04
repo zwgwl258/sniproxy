@@ -166,3 +166,7 @@ build without UDNS, but these features will be unavailable.
 UDNS uses a single UDP socket for all queries, so it is recommended you use a
 local caching DNS resolver (with a single socket each DNS query is protected by
 spoofing by a single 16 bit query ID, which makes it relatively easy to spoof).
+
+## Client-aware backend DNS
+
+See [Client DNS routing](CLIENT-DNS.md) for per-client IP/CIDR configuration.

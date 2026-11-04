@@ -38,7 +38,7 @@ DNS 失败不跨组回退。目标为字面 IP 的转发不进行 DNS 查询。
 
 ```sh
 sudo apt-get install build-essential autoconf automake libev-dev libpcre2-dev libudns-dev
-./autogen.sh
+autoreconf -fi
 ./configure --enable-dns
 make -j"$(nproc)"
 sudo python3 tests/client_dns_integration.py ./src/sniproxy
