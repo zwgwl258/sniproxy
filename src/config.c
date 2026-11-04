@@ -30,6 +30,7 @@
 #include <assert.h>
 #include "cfg_parser.h"
 #include "config.h"
+#include "resolv.h"
 #include "logger.h"
 #include "connection.h"
 
@@ -54,6 +55,7 @@ static int end_error_logger_stanza(struct Config *, struct LoggerBuilder *);
 static int end_global_access_logger_stanza(struct Config *, struct LoggerBuilder *);
 static int end_listener_access_logger_stanza(struct Listener *, struct LoggerBuilder *);
 static struct ResolverConfig *new_resolver_config(void);
+static int accept_resolver_client(struct ResolverConfig *, const char *);
 static int accept_resolver_nameserver(struct ResolverConfig *, const char *);
 static int accept_resolver_search(struct ResolverConfig *, const char *);
 static int accept_resolver_mode(struct ResolverConfig *, const char *);
@@ -83,6 +85,10 @@ static const struct Keyword logger_stanza_grammar[] = {
 };
 
 static const struct Keyword resolver_stanza_grammar[] = {
+    {
+        .keyword="client",
+        .parse_arg=(int(*)(void *, const char *))accept_resolver_client,
+    },
     {
         .keyword="nameserver",
         .parse_arg=(int(*)(void *, const char *))accept_resolver_nameserver,
@@ -272,6 +278,14 @@ free_config(struct Config *config, struct ev_loop *loop) {
     free(config->group);
     free(config->pidfile);
 
+    while (config->client_resolvers != NULL) {
+        struct ResolverConfig *r = config->client_resolvers;
+        config->client_resolvers = r->next;
+        free_string_vector(r->nameservers);
+        free_string_vector(r->search);
+        free(r->client);
+        free(r);
+    }
     free_string_vector(config->resolver.nameservers);
     config->resolver.nameservers = NULL;
     free_string_vector(config->resolver.search);
@@ -321,6 +335,8 @@ print_config(FILE *file, struct Config *config) {
         fprintf(file, "pidfile %s\n\n", config->pidfile);
 
     print_resolver_config(file, &config->resolver);
+    for (struct ResolverConfig *r = config->client_resolvers; r != NULL; r = r->next)
+        print_resolver_config(file, r);
 
     SLIST_FOREACH(listener, &config->listeners, entries) {
         print_listener_config(file, listener);
@@ -564,7 +580,7 @@ end_listener_access_logger_stanza(struct Listener *listener, struct LoggerBuilde
 
 static struct ResolverConfig *
 new_resolver_config(void) {
-    struct ResolverConfig *resolver = malloc(sizeof(struct ResolverConfig));
+    struct ResolverConfig *resolver = calloc(1, sizeof(struct ResolverConfig));
 
     if (resolver != NULL) {
         resolver->nameservers = NULL;
@@ -618,6 +634,18 @@ free_string_vector(char **vector) {
 }
 
 static int
+accept_resolver_client(struct ResolverConfig *resolver, const char *cidr) {
+    unsigned char network[16];
+    unsigned int prefix;
+    if (resolver->client != NULL || !parse_client_cidr(cidr, network, &prefix)) {
+        err("Invalid or repeated resolver client: %s", cidr);
+        return -1;
+    }
+    resolver->client = strdup(cidr);
+    return resolver->client != NULL ? 1 : -1;
+}
+
+static int
 accept_resolver_nameserver(struct ResolverConfig *resolver, const char *nameserver) {
     /* Validate address is a valid IP */
     struct Address *ns_address = new_address(nameserver);
@@ -655,6 +683,22 @@ accept_resolver_mode(struct ResolverConfig *resolver, const char *mode) {
 
 static int
 end_resolver_stanza(struct Config *config, struct ResolverConfig *resolver) {
+    if (resolver->client != NULL && resolver->nameservers == NULL) {
+        err("Client resolver requires at least one nameserver");
+        free_string_vector(resolver->search);
+        free(resolver->client);
+        free(resolver);
+        return -1;
+    }
+    if (resolver->client != NULL) {
+        struct ResolverConfig **tail = &config->client_resolvers;
+        while (*tail != NULL)
+            tail = &(*tail)->next;
+        *tail = resolver;
+        return 1;
+    }
+    free_string_vector(config->resolver.nameservers);
+    free_string_vector(config->resolver.search);
     config->resolver = *resolver;
     free(resolver);
 
@@ -664,6 +708,8 @@ end_resolver_stanza(struct Config *config, struct ResolverConfig *resolver) {
 static void
 print_resolver_config(FILE *file, struct ResolverConfig *resolver) {
     fprintf(file, "resolver {\n");
+    if (resolver->client != NULL)
+        fprintf(file, "\tclient %s\n", resolver->client);
 
     for (int i = 0; resolver->nameservers != NULL && resolver->nameservers[i] != NULL; i++)
         fprintf(file, "\tnameserver %s\n", resolver->nameservers[i]);

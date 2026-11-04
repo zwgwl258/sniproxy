@@ -36,10 +36,12 @@ struct Config {
     char *group;
     char *pidfile;
     struct ResolverConfig {
+        struct ResolverConfig *next;
+        char *client;
         char **nameservers;
         char **search;
         int mode;
-    } resolver;
+    } resolver, *client_resolvers;
     struct Logger *access_log;
     struct Listener_head listeners;
     struct Table_head tables;

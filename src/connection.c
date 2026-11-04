@@ -547,8 +547,8 @@ resolve_server_address(struct Connection *con, struct ev_loop *loop) {
             }
         }
 
-        con->query_handle = resolv_query(address_hostname(result.address),
-                resolv_mode, resolv_cb,
+        con->query_handle = resolv_query_client(address_hostname(result.address),
+                resolv_mode, &con->client.addr, resolv_cb,
                 (void (*)(void *))free_resolv_cb_data, cb_data);
 
         if (con->query_handle == NULL) {

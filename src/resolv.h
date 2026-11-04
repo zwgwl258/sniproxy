@@ -30,6 +30,12 @@
 
 struct ResolvQuery;
 
+struct sockaddr_storage;
+int parse_client_cidr(const char *, unsigned char *, unsigned int *);
+int resolv_add_client(struct ev_loop *, const char *, char **, char **, int);
+struct ResolvQuery *resolv_query_client(const char *, int,
+        const struct sockaddr_storage *, void (*)(struct Address *, void *),
+        void (*)(void *), void *);
 int resolv_init(struct ev_loop *, char **, char **, int);
 struct ResolvQuery *resolv_query(const char *, int,
         void(*)(struct Address *, void *), void (*)(void *), void *);

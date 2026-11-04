@@ -1,0 +1,10 @@
+name: Client DNS
+on: [push, pull_request]
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y build-essential autoconf automake libev-dev libpcre2-dev libudns-dev
+      - run: ./autogen.sh && ./configure --enable-dns && make -j2
+      - run: sudo python3 tests/client_dns_integration.py ./src/sniproxy

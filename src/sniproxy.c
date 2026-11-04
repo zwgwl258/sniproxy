@@ -133,6 +133,10 @@ main(int argc, char **argv) {
     resolv_init(EV_DEFAULT, config->resolver.nameservers,
             config->resolver.search, config->resolver.mode);
 
+    for (struct ResolverConfig *r = config->client_resolvers; r != NULL; r = r->next)
+        if (resolv_add_client(EV_DEFAULT, r->client, r->nameservers, r->search, r->mode) < 0)
+            fatal("Failed to initialize client resolver for %s (DNS support required)", r->client);
+
     init_connections();
 
     ev_run(EV_DEFAULT, 0);

@@ -30,6 +30,7 @@
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <ev.h>
 #include <errno.h>
 #ifdef HAVE_LIBUDNS
@@ -40,7 +41,52 @@
 #include "logger.h"
 
 
+int
+parse_client_cidr(const char *cidr, unsigned char *network, unsigned int *prefix) {
+    const char *slash = strchr(cidr, '/');
+    char address[INET6_ADDRSTRLEN];
+    size_t len = slash ? (size_t)(slash - cidr) : strlen(cidr);
+    if (len == 0 || len >= sizeof(address))
+        return 0;
+    memcpy(address, cidr, len);
+    address[len] = '\0';
+    int family = inet_pton(AF_INET, address, network) == 1 ? AF_INET :
+                 inet_pton(AF_INET6, address, network) == 1 ? AF_INET6 : 0;
+    if (!family)
+        return 0;
+    unsigned int max = family == AF_INET ? 32 : 128;
+    if (!slash) {
+        *prefix = max;
+        return family;
+    }
+    const char *digits = slash + 1;
+    if (!*digits || digits[strspn(digits, "0123456789")])
+        return 0;
+    unsigned long value = strtoul(digits, NULL, 10);
+    if (value > max)
+        return 0;
+    *prefix = (unsigned int)value;
+    return family;
+}
+
+struct ResolvQuery *
+resolv_query(const char *hostname, int mode,
+        void (*cb)(struct Address *, void *), void (*free_cb)(void *), void *data) {
+    return resolv_query_client(hostname, mode, NULL, cb, free_cb, data);
+}
+
 #ifndef HAVE_LIBUDNS
+int
+resolv_add_client(struct ev_loop *loop, const char *cidr, char **nameservers,
+        char **search, int mode) {
+    (void)loop;
+    (void)cidr;
+    (void)nameservers;
+    (void)search;
+    (void)mode;
+    return -1;
+}
+
 /*
  * If we do not have a DNS resolution library stub out module as no ops
  */
@@ -62,10 +108,11 @@ resolv_shutdown(struct ev_loop *loop) {
 }
 
 struct ResolvQuery *
-resolv_query(const char *hostname, int mode,
+resolv_query_client(const char *hostname, int mode, const struct sockaddr_storage *peer,
         void (*client_cb)(struct Address *, void *),
         void (*client_free_cb)(void *), void *client_cb_data) {
     (void)hostname;
+    (void)peer;
     (void)mode;
     (void)client_cb;
     (void)client_free_cb;
@@ -85,6 +132,7 @@ resolv_cancel(struct ResolvQuery *query_handle) {
  */
 
 struct ResolvQuery {
+    struct dns_ctx *ctx;
     void (*client_cb)(struct Address *, void *);
     void (*client_free_cb)(void *);
     void *client_cb_data;
@@ -95,9 +143,20 @@ struct ResolvQuery {
 };
 
 
-static int default_resolv_mode = 1 /* RESOLV_MODE_IPV4_ONLY */;
-static struct ev_io resolv_io_watcher;
-static struct ev_timer resolv_timeout_watcher;
+struct Resolver {
+    struct dns_ctx *ctx;
+    struct ev_loop *loop;
+    ev_io io;
+    ev_timer timer;
+    struct Resolver *next;
+    unsigned char network[16];
+    int family;
+    unsigned int prefix;
+    int mode;
+};
+
+static struct Resolver default_resolver;
+static struct Resolver *client_resolvers;
 
 
 static void resolv_sock_cb(struct ev_loop *, struct ev_io *, int);
@@ -112,9 +171,12 @@ static struct Address *choose_ipv6_first(struct ResolvQuery *);
 static struct Address *choose_any(struct ResolvQuery *);
 
 
-int
-resolv_init(struct ev_loop *loop, char **nameservers, char **search, int mode) {
-    struct dns_ctx *ctx = &dns_defctx;
+static int
+open_resolver(struct Resolver *resolver, struct ev_loop *loop,
+        char **nameservers, char **search, int mode) {
+    struct dns_ctx *ctx = resolver->ctx;
+    resolver->loop = loop;
+    resolver->mode = mode;
     if (nameservers == NULL) {
         /* Nameservers not specified, use system resolver config */
         dns_init(ctx, 0);
@@ -122,14 +184,13 @@ resolv_init(struct ev_loop *loop, char **nameservers, char **search, int mode) {
         dns_reset(ctx);
 
         for (int i = 0; nameservers[i] != NULL; i++)
-            dns_add_serv(ctx, nameservers[i]);
+            if (dns_add_serv(ctx, nameservers[i]) < 0)
+                fatal("Invalid or excess DNS nameserver: %s", nameservers[i]);
 
         if (search != NULL)
             for (int i = 0; search[i] != NULL; i++)
                 dns_add_srch(ctx, search[i]);
     }
-
-    default_resolv_mode = mode;
 
     int sockfd = dns_open(ctx);
     if (sockfd < 0)
@@ -139,37 +200,98 @@ resolv_init(struct ev_loop *loop, char **nameservers, char **search, int mode) {
     int flags = fcntl(sockfd, F_GETFL, 0);
     fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
 
-    ev_io_init(&resolv_io_watcher, resolv_sock_cb, sockfd, EV_READ);
-    resolv_io_watcher.data = ctx;
+    ev_io_init(&resolver->io, resolv_sock_cb, sockfd, EV_READ);
+    resolver->io.data = ctx;
 
-    ev_io_start(loop, &resolv_io_watcher);
+    ev_io_start(loop, &resolver->io);
 
 
-    ev_timer_init(&resolv_timeout_watcher, resolv_timeout_cb, 0.0, 0.0);
-    resolv_timeout_watcher.data = ctx;
+    ev_timer_init(&resolver->timer, resolv_timeout_cb, 0.0, 0.0);
+    resolver->timer.data = ctx;
 
-    dns_set_tmcbck(ctx, dns_timer_setup_cb, loop);
+    dns_set_tmcbck(ctx, dns_timer_setup_cb, resolver);
 
     return sockfd;
 }
 
+int
+resolv_init(struct ev_loop *loop, char **nameservers, char **search, int mode) {
+    default_resolver.ctx = &dns_defctx;
+    return open_resolver(&default_resolver, loop, nameservers, search, mode);
+}
+
+int
+resolv_add_client(struct ev_loop *loop, const char *cidr, char **nameservers,
+        char **search, int mode) {
+    struct Resolver *resolver = calloc(1, sizeof(*resolver));
+    if (resolver == NULL)
+        return -1;
+    resolver->family = parse_client_cidr(cidr, resolver->network, &resolver->prefix);
+    if (!resolver->family || (resolver->ctx = dns_new(NULL)) == NULL) {
+        free(resolver);
+        return -1;
+    }
+    open_resolver(resolver, loop, nameservers, search, mode);
+    resolver->next = client_resolvers;
+    client_resolvers = resolver;
+    return 0;
+}
+
+static void
+close_resolver(struct Resolver *resolver, struct ev_loop *loop) {
+    ev_io_stop(loop, &resolver->io);
+    ev_timer_stop(loop, &resolver->timer);
+    dns_close(resolver->ctx);
+}
+
 void
-resolv_shutdown(struct ev_loop * loop) {
-    struct dns_ctx *ctx = (struct dns_ctx *)resolv_io_watcher.data;
+resolv_shutdown(struct ev_loop *loop) {
+    while (client_resolvers != NULL) {
+        struct Resolver *resolver = client_resolvers;
+        client_resolvers = resolver->next;
+        close_resolver(resolver, loop);
+        dns_free(resolver->ctx);
+        free(resolver);
+    }
+    close_resolver(&default_resolver, loop);
+}
 
-    ev_io_stop(loop, &resolv_io_watcher);
-
-    if (ev_is_active(&resolv_timeout_watcher))
-        ev_timer_stop(loop, &resolv_timeout_watcher);
-
-    dns_close(ctx);
+static struct Resolver *
+select_resolver(const struct sockaddr_storage *peer) {
+    struct Resolver *best = &default_resolver;
+    if (peer == NULL)
+        return best;
+    int family = peer->ss_family;
+    const unsigned char *ip;
+    if (family == AF_INET) {
+        ip = (const unsigned char *)&((const struct sockaddr_in *)peer)->sin_addr;
+    } else if (family == AF_INET6) {
+        const struct in6_addr *v6 = &((const struct sockaddr_in6 *)peer)->sin6_addr;
+        ip = v6->s6_addr;
+        if (IN6_IS_ADDR_V4MAPPED(v6)) {
+            ip += 12;
+            family = AF_INET;
+        }
+    } else {
+        return best;
+    }
+    for (struct Resolver *r = client_resolvers; r != NULL; r = r->next) {
+        if (family != r->family || (best != &default_resolver && r->prefix <= best->prefix))
+            continue;
+        unsigned int bytes = r->prefix / 8, bits = r->prefix % 8;
+        if (memcmp(ip, r->network, bytes) == 0 &&
+                (!bits || ((ip[bytes] ^ r->network[bytes]) >> (8 - bits)) == 0))
+            best = r;
+    }
+    return best;
 }
 
 struct ResolvQuery *
-resolv_query(const char *hostname, int mode,
+resolv_query_client(const char *hostname, int mode, const struct sockaddr_storage *peer,
         void (*client_cb)(struct Address *, void *),
         void (*client_free_cb)(void *), void *client_cb_data) {
-    struct dns_ctx *ctx = (struct dns_ctx *)resolv_io_watcher.data;
+    struct Resolver *resolver = select_resolver(peer);
+    struct dns_ctx *ctx = resolver->ctx;
 
     /*
      * Wrap udns's call back in our own
@@ -179,11 +301,12 @@ resolv_query(const char *hostname, int mode,
         err("Failed to allocate memory for DNS query callback data.");
         return NULL;
     }
+    cb_data->ctx = ctx;
     cb_data->client_cb = client_cb;
     cb_data->client_free_cb = client_free_cb;
     cb_data->client_cb_data = client_cb_data;
     cb_data->resolv_mode = mode != RESOLV_MODE_DEFAULT ?
-                           mode : default_resolv_mode;
+                           mode : resolver->mode;
     memset(cb_data->queries, 0, sizeof(cb_data->queries));
     cb_data->response_count = 0;
     cb_data->responses = NULL;
@@ -221,7 +344,7 @@ resolv_cancel(struct ResolvQuery *query_handle) {
         return;
 
     struct ResolvQuery *cb_data = (struct ResolvQuery *)query_handle;
-    struct dns_ctx *ctx = (struct dns_ctx *)resolv_io_watcher.data;
+    struct dns_ctx *ctx = cb_data->ctx;
 
     for (size_t i = 0; i < sizeof(cb_data->queries) / sizeof(cb_data->queries[0]); i++) {
         if (cb_data->queries[i] != NULL) {
@@ -400,14 +523,15 @@ resolv_timeout_cb(struct ev_loop *loop, struct ev_timer *w, int revents) {
  */
 static void
 dns_timer_setup_cb(struct dns_ctx *ctx, int timeout, void *data) {
-    struct ev_loop *loop = (struct ev_loop *)data;
+    struct Resolver *resolver = data;
+    struct ev_loop *loop = resolver->loop;
 
-    if (ev_is_active(&resolv_timeout_watcher))
-        ev_timer_stop(loop, &resolv_timeout_watcher);
+    if (ev_is_active(&resolver->timer))
+        ev_timer_stop(loop, &resolver->timer);
 
     if (ctx != NULL && timeout >= 0) {
-        ev_timer_set(&resolv_timeout_watcher, timeout, 0.0);
-        ev_timer_start(loop, &resolv_timeout_watcher);
+        ev_timer_set(&resolver->timer, timeout, 0.0);
+        ev_timer_start(loop, &resolver->timer);
     }
 }
 
