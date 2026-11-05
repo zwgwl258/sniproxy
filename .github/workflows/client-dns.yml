@@ -62,7 +62,7 @@ jobs:
             printf "%s\n" "Acquire::https::CaInfo \"/ci-ca.crt\";" "Acquire::https::No-Cache \"true\";" "Acquire::Retries \"3\";" > /etc/apt/apt.conf.d/99ci
             apt-get update
             apt-get -y --allow-downgrades dist-upgrade
-            apt-get install -y --allow-downgrades --no-install-recommends build-essential autoconf automake libev-dev libpcre2-dev libudns-dev libmaxminddb-dev dnsutils python3 openssl
+            apt-get install -y --allow-downgrades --no-install-recommends build-essential autoconf automake libev-dev libpcre2-dev libudns-dev libmaxminddb-dev dnsutils python3 openssl curl ca-certificates
             autoconf --version
             mkdir /build
             cp -a /source/. /build/

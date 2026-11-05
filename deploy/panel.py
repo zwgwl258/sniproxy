@@ -399,12 +399,14 @@ def dns_benchmark_status():
         report = json.loads(Path("/run/sniproxy-dns-benchmark").read_text(
             encoding="utf-8").rsplit("\n", 1)[1])
     except (OSError, ValueError, IndexError):
-        return "<p>综合测速：等待本机代理测试。</p>"
-    if time.time() - report["time"] > 4500 and not runtime_active:
+        if not runtime_active:
+            return "<p>综合测速：等待本机代理测试。</p>"
+        report = {}
+    if time.time() - report.get("time", 0) > 4500 and not runtime_active:
         return "<p>逐域名测速结果已过期，暂按 DNS 探测结果选优。</p>"
-    if not report.get("by_domain"):
+    if not report.get("by_domain") and not (runtime_active and runtime.get("groups")):
         return "<p>逐域名测速未运行：需要可识别的已配置域名和兜底 DNS。</p>"
-    groups = report.get("groups", {})
+    groups = report.get("groups", {}) or (runtime.get("groups", {}) if runtime_active else {})
     overview = ""
     if groups:
         group_rows = []
@@ -440,6 +442,7 @@ def dns_benchmark_status():
                               f"<td>{preferred}</td><td>{reason}</td></tr>")
         monitor = "运行中：约 15 秒检查，稳定优先，故障整组切换不重启" if runtime_active else "未收到有效心跳（实时熔断未生效）"
         overview = (f"<p><strong>已测速 DNS 分组：{len(groups)} 组</strong>（每 30 分钟）</p>"
+                    f"<p>上轮综合测速耗时：{html.escape(str(report.get('duration_seconds', '旧报告暂无')))} 秒；定时测速只更新备用，不追快替换当前 DNS。</p>"
                     f"<p>实时监测：{monitor}。统计为尽力采样，TCP 成功不代表业务登录成功。</p>"
                     "<table><thead><tr><th>分组（首个可测速域名）</th><th>本轮通过</th>"
                     "<th>首选兜底 DNS</th><th>选用原因</th></tr></thead><tbody>"

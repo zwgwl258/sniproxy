@@ -175,14 +175,14 @@ def main():
                                              if domain_name(r).lower() in domains))
                 key = ",".join(members)
                 measured = report.get("groups", {}).get(key, {})
-                if not key or not servers or not measured:
+                if not key or not servers or (not measured and key not in groups):
                     continue
                 group = groups.get(key, {}).copy()
                 if group.get("preferred") not in servers:
                     group = dict(preferred=measured.get("preferred"), reason="首次采用综合测速结果")
                 if group.get("preferred") not in servers:
                     continue
-                group["standby"] = measured.get("standby", [])
+                group["standby"] = measured.get("standby", group.get("standby", []))
                 selected = [e for e in window if e[5] == group["preferred"] and
                             any(e[4] == d or e[4].endswith("." + d) for d in members)]
                 failing = list(dict.fromkeys(e[4] for e in selected if e[1] in ("failed", "reset")))
@@ -199,6 +199,8 @@ def main():
                 valid[key] = group
             # Never publish a decision for configuration edited during probes.
             if CONFIG.read_text(encoding="utf-8") == config:
+                changed |= (set(valid) != set(groups) or any(
+                    g.get("preferred") != groups.get(k, {}).get("preferred") for k, g in valid.items()))
                 groups = valid
                 atomic_write(RUNTIME, route_text(groups, time.time()), mode=0o644)
                 if changed:

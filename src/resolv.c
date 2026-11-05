@@ -420,7 +420,7 @@ benchmark_preference(const char *hostname, int *strict) {
             struct stat info;
             char line[sizeof(struct BenchmarkRoute) + 4];
             if (fstat(fileno(report), &info) == 0 && info.st_mtime <= now &&
-                    now - info.st_mtime <= (file == 0 ? 45 : 4500)) {
+                    (file == 0 || now - info.st_mtime <= 4500)) {
                 while (fgets(line, sizeof(line), report) != NULL && line[0] != '\n') {
                     struct BenchmarkRoute route = {0};
                     if (sscanf(line, "%253s %45s %c", route.domain, route.server, &route.strict) < 2)

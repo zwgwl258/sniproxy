@@ -152,6 +152,7 @@ def standby_order(scores, latest, preferred):
 
 
 def main():
+    started = time.monotonic()
     config = CONFIG.read_text(encoding="utf-8")
     domains, servers = targets(config)
     try:
@@ -236,7 +237,8 @@ def main():
                 groups[key]["reason"] = "稳定优先：沿用实时监测当前 DNS"
                 for domain in key.split(","):
                     by_domain[domain]["preferred"] = data["preferred"]
-    report = dict(domains=domains, servers=servers, by_domain=by_domain, groups=groups, time=time.time())
+    report = dict(domains=domains, servers=servers, by_domain=by_domain, groups=groups,
+                  time=time.time(), duration_seconds=round(time.monotonic() - started, 1))
     routes = "".join(f"{domain} {data['preferred']}{' !' if domain in strict else ''}\n" for domain, data in by_domain.items()
                      if data["preferred"])
     atomic_write(REPORT, (routes + "\n" + json.dumps(report)).encode("utf-8"), mode=0o644)

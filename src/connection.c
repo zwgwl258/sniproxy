@@ -91,7 +91,7 @@ static void free_resolv_cb_data(struct resolv_cb_data *);
 /* Best-effort nonblocking telemetry: a missing/slow monitor must never block
  * the proxy. The receiver authenticates the sender's kernel PID credentials. */
 static void
-health_event(struct Connection *con, const char *event) {
+emit_health_event(struct Connection *con, const char *event) {
     static int fd = -1;
     const char *path = getenv("SNIPROXY_HEALTH_SOCKET");
     if (!path || !con->health_dns[0] || !con->hostname)
@@ -114,6 +114,13 @@ health_event(struct Connection *con, const char *event) {
     if (n > 0 && (size_t)n < sizeof(message))
         (void)sendto(fd, message, (size_t)n, MSG_DONTWAIT | MSG_NOSIGNAL,
                 (struct sockaddr *)&addr, sizeof(addr));
+}
+
+static void
+health_event(struct Connection *con, const char *event) {
+    int saved_errno = errno;
+    emit_health_event(con, event);
+    errno = saved_errno;
 }
 
 static void
