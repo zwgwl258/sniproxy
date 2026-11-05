@@ -81,7 +81,8 @@ if [[ ! -f $state/panel.env || -v PANEL_BIND || -v PANEL_PORT ]]; then
 fi
 install -m 0644 deploy/sniproxy-managed.service deploy/sniproxy-panel.service deploy/sniproxy-dns-benchmark.service deploy/sniproxy-dns-benchmark.timer deploy/sniproxy-dns-health.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now sniproxy-dns-health.service
+systemctl enable sniproxy-dns-health.service
+systemctl restart sniproxy-dns-health.service
 systemctl enable sniproxy-panel.service
 systemctl restart sniproxy-panel.service
 sleep 1

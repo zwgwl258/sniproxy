@@ -1,6 +1,9 @@
 import importlib.util
+import json
 from pathlib import Path
 import sys
+import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -12,6 +15,36 @@ spec.loader.exec_module(benchmark)
 
 
 class BenchmarkTests(unittest.TestCase):
+    def test_full_round_keeps_group_choice_even_after_report_expiry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config, report = Path(tmp) / "config", Path(tmp) / "report"
+            config.write_text(r"""table {
+    .*example\.com$ *
+    .*example\.org$ *
+}
+resolver {
+    client fallback
+    nameserver 192.0.2.1
+    nameserver 192.0.2.2
+    mode ipv4_only
+}
+""")
+            report.write_text("\n" + json.dumps(dict(
+                domains=["example.com", "example.org"], servers=["192.0.2.1", "192.0.2.2"],
+                time=time.time() - 5000, groups={"example.com,example.org": dict(
+                    preferred="192.0.2.1", rounds=[])})))
+            def measure(server, domains):
+                ms = 100 if server == "192.0.2.1" else 1
+                return dict(dns=[ms] * 2, proxy=[ms] * 2, status=[200] * 2)
+            with patch.object(benchmark, "CONFIG", config), patch.object(benchmark, "REPORT", report), \
+                    patch.object(benchmark, "measure", side_effect=measure), \
+                    patch.object(benchmark, "atomic_write", side_effect=lambda path, data, **kw: path.write_bytes(data)):
+                benchmark.main()
+            result = json.loads(report.read_text().rsplit("\n", 1)[1])
+            group = result["groups"]["example.com,example.org"]
+            self.assertEqual(group["preferred"], "192.0.2.1")
+            self.assertEqual(group["standby"], ["192.0.2.2"])
+
     def test_targets_from_config(self):
         self.assertEqual(benchmark.targets(r"""
 table {
