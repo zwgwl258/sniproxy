@@ -94,11 +94,17 @@ def measure(server, domains):
                             break
                     except OSError:
                         time.sleep(0.05)
-                for domain in domains:
-                    dns.append(dns_ms(server, domain))
-                    elapsed, code = proxy_probe(port, domain) if proc.poll() is None else (None, 0)
-                    proxy.append(elapsed)
-                    status.append(code)
+                def probe(domain):
+                    latency = dns_ms(server, domain)
+                    # An unanswered DNS lookup cannot produce a useful proxy test.
+                    elapsed, code = proxy_probe(port, domain) if latency is not None and proc.poll() is None else (None, 0)
+                    return latency, elapsed, code
+                # One proxy process per DNS, with a bounded global request budget.
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    for latency, elapsed, code in pool.map(probe, domains):
+                        dns.append(latency)
+                        proxy.append(elapsed)
+                        status.append(code)
             finally:
                 if proc.poll() is None:
                     proc.terminate()
@@ -118,6 +124,10 @@ def summarize(rounds, servers):
 
 
 def select(scores, current, pending, latest):
+    # Scheduled ranking must not replace a configured incumbent. Runtime
+    # failover is a separate decision, not evidence from one synthetic round.
+    if current in scores:
+        return current, ""
     eligible = [ip for ip in scores if any(ms is not None for ms in latest[ip]["proxy"])]
     if not eligible:
         return "", ""
@@ -126,9 +136,19 @@ def select(scores, current, pending, latest):
         d, _, dns = scores[ip]["dns"]
         return -p, elapsed // 25, -d, dns if dns is not None else float("inf"), elapsed
     best = min(eligible, key=rank)
-    if current not in eligible or best == current or best == pending:
-        return best, ""
-    return current, best
+    return best, ""
+
+
+def standby_order(scores, latest, preferred):
+    remaining = {ip: value for ip, value in scores.items() if ip != preferred}
+    ordered = []
+    while remaining:
+        best, _ = select(remaining, None, None, latest)
+        if not best:
+            break
+        ordered.append(best)
+        del remaining[best]
+    return ordered
 
 
 def main():
@@ -139,17 +159,21 @@ def main():
     except (OSError, ValueError, IndexError):
         old = {}
     if old.get("domains") != domains or old.get("servers") != servers or time.time() - old.get("time", 0) > 4500:
-        old = {}
+        # Expire measurements, not the incumbent: a slow/interrupted round must
+        # not turn the next scheduled test into a fresh election.
+        for section in ("by_domain", "groups"):
+            for prior in old.get(section, {}).values():
+                prior["rounds"] = []
     by_domain = {}
     groups = {}
     strict = set()
     if domains and servers:
-        jobs = [(ip, offset) for ip in servers for offset in range(0, len(domains), 16)]
+        jobs = servers
         latest = {domain: {} for domain in domains}
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            results = pool.map(lambda job: measure(job[0], domains[job[1]:job[1] + 16]), jobs)
-            for (ip, offset), result in zip(jobs, results):
-                for i, domain in enumerate(domains[offset:offset + 16]):
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = pool.map(lambda ip: measure(ip, domains), jobs)
+            for ip, result in zip(jobs, results):
+                for i, domain in enumerate(domains):
                     latest[domain][ip] = {kind: [result[kind][i]] for kind in ("dns", "proxy", "status")}
         for domain, sample in latest.items():
             prior = old.get("by_domain", {}).get(domain, {})
@@ -174,13 +198,15 @@ def main():
                 key_passed = {ip for ip in servers if sample[ip]["proxy"][0] is not None}
                 eligible = {ip: score for ip, score in scores.items()
                             if not key_passed or ip in key_passed}
-                preferred, pending = select(eligible, prior.get("preferred"), prior.get("pending"), sample)
+                incumbent = prior.get("preferred")
+                preferred, pending = ((incumbent, "") if incumbent in servers else
+                                      select(eligible, None, None, sample))
                 reason = ("关键域名通过，按覆盖率选优" if key_passed else "关键域名未通过，按覆盖率选优")
                 if not preferred:
                     preferred = prior.get("preferred") or servers[0]
                     reason = "无 HTTPS 成功，保留原首选" if prior.get("preferred") else "无 HTTPS 成功，使用列表首台"
-                elif pending:
-                    reason = "候选待复测，保留原首选"
+                elif incumbent == preferred:
+                    reason = "稳定优先：定时测速保留当前 DNS，不自动追快切换"
                 selected = sample[preferred]
                 diagnostics = dict(
                     dns_failed=sum(ms is None for ms in selected["dns"]),
@@ -189,7 +215,8 @@ def main():
                     http_failed=sum(latest[d][preferred]["status"][0] >= 400 for d in members))
                 groups[key] = dict(rounds=rounds, preferred=preferred, pending=pending, reason=reason,
                                    coverage=sum(ms is not None for ms in selected["proxy"]),
-                                   diagnostics=diagnostics)
+                                   diagnostics=diagnostics,
+                                   standby=standby_order(scores, sample, preferred))
                 for domain in members:
                     by_domain[domain]["preferred"] = preferred
                     by_domain[domain]["group"] = members[0]
