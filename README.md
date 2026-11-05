@@ -7,11 +7,11 @@
 **支持 Debian / Ubuntu（systemd，amd64 或 arm64）。** 在服务器上以 **root** 执行。不需要 Git、GitHub 登录或手动上传国家数据库。
 
 ```bash
-f=$(mktemp) && curl -fLsS 'https://raw.githubusercontent.com/zwgwl258/sniproxy/b7f9563b1578bf65fd38275bbdac15e94f955cc0/install_cmd.sh' -o "$f" && bash "$f"
+f=$(mktemp) && curl -fLsS 'https://raw.githubusercontent.com/zwgwl258/sniproxy/24a9ff0bcf4d0b3b14037559589ecd4fa9bf9e2b/install_cmd.sh' -o "$f" && bash "$f"
 ```
 
 此命令固定到已验证的安装版本，不受仓库首页文档更新影响。安装器会校验下载的归档。
-[查看本版 Linux 部署、Debian 11 构建与运行期切换测试](https://github.com/zwgwl258/sniproxy/actions/runs/42010016423)。
+[查看本版 Linux 部署、Debian 11 构建、客户端监控与运行期切换测试](https://github.com/zwgwl258/sniproxy/actions/runs/42014023475)。
 
 - **全新安装**：仅在配置文件不存在时写入默认模板，预置 12 个域名组（324 条规则），全局兜底 DNS 留空，使用系统 DNS。成功后终端会显示面板地址、用户名 `admin` 和初始密码。首次登录必须修改密码（12–128 个字符），然后用新密码重新登录。不要公开安装输出中的密码。
 - **覆盖升级**：运行同一条命令即可保留域名、DNS 规则和已有面板密码，服务可能短暂重启。平时可以从「修改面板密码」更换密码。
