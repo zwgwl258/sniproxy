@@ -97,6 +97,10 @@ resolv_open_country_db(const char *path) {
 #endif
 
 #ifndef HAVE_LIBUDNS
+const char *resolv_query_fallback_server(const struct ResolvQuery *query) {
+    (void)query;
+    return NULL;
+}
 int
 resolv_add_client(struct ev_loop *loop, const char *cidr, char **nameservers,
         char **search, int mode) {
@@ -408,13 +412,15 @@ benchmark_preference(const char *hostname, int *strict) {
         count = 0;
         free(routes);
         routes = NULL;
-        FILE *report = fopen("/run/sniproxy-dns-benchmark", "r");
+        const char *paths[] = {"/run/sniproxy-dns-runtime", "/run/sniproxy-dns-benchmark"};
+        size_t capacity = 0;
+        for (size_t file = 0; file < 2; file++) {
+        FILE *report = fopen(paths[file], "r");
         if (report != NULL) {
             struct stat info;
-            size_t capacity = 0;
             char line[sizeof(struct BenchmarkRoute) + 4];
             if (fstat(fileno(report), &info) == 0 && info.st_mtime <= now &&
-                    now - info.st_mtime <= 4500) {
+                    now - info.st_mtime <= (file == 0 ? 45 : 4500)) {
                 while (fgets(line, sizeof(line), report) != NULL && line[0] != '\n') {
                     struct BenchmarkRoute route = {0};
                     if (sscanf(line, "%253s %45s %c", route.domain, route.server, &route.strict) < 2)
@@ -431,6 +437,7 @@ benchmark_preference(const char *hostname, int *strict) {
                 }
             }
             fclose(report);
+        }
         }
     }
     size_t len = strlen(hostname);
@@ -665,6 +672,17 @@ retry_fallback(struct ResolvQuery *query) {
         query->fallback_hostname = NULL;
         free(hostname);
     }
+}
+
+/* Attribute only queries actually answered by a fallback DNS context. Healthy
+ * country/CIDR-specific resolvers must not trigger global group failover. */
+const char *
+resolv_query_fallback_server(const struct ResolvQuery *query) {
+    if (query != NULL && fallback_resolver != NULL)
+        for (const struct DnsProbe *p = fallback_resolver->probes; p; p = p->next)
+            if (query->ctx == p->endpoint.ctx)
+                return p->server;
+    return NULL;
 }
 
 void

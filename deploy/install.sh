@@ -54,7 +54,7 @@ fi
 install -d -m 0755 "$lib"
 install -m 0755 src/sniproxy "$lib/sniproxy"
 install -m 0755 tests/config_test "$lib/config-test"
-install -m 0644 deploy/panel.py deploy/dns-benchmark.py "$lib/"
+install -m 0644 deploy/panel.py deploy/dns-benchmark.py deploy/dns-health.py "$lib/"
 if [[ ! -f $state/sniproxy.conf ]]; then
     install -m 0600 "${SNIPROXY_CONFIG:-deploy/default.conf}" "$state/sniproxy.conf"
 fi
@@ -79,8 +79,9 @@ fi
 if [[ ! -f $state/panel.env || -v PANEL_BIND || -v PANEL_PORT ]]; then
     printf 'PANEL_BIND=%s\nPANEL_PORT=%s\n' "$bind" "$port" > "$state/panel.env"
 fi
-install -m 0644 deploy/sniproxy-managed.service deploy/sniproxy-panel.service deploy/sniproxy-dns-benchmark.service deploy/sniproxy-dns-benchmark.timer /etc/systemd/system/
+install -m 0644 deploy/sniproxy-managed.service deploy/sniproxy-panel.service deploy/sniproxy-dns-benchmark.service deploy/sniproxy-dns-benchmark.timer deploy/sniproxy-dns-health.service /etc/systemd/system/
 systemctl daemon-reload
+systemctl enable --now sniproxy-dns-health.service
 systemctl enable sniproxy-panel.service
 systemctl restart sniproxy-panel.service
 sleep 1

@@ -39,6 +39,7 @@
 #include <arpa/inet.h>
 #include <ev.h>
 #include <assert.h>
+#include <sys/un.h>
 #include "connection.h"
 #include "resolv.h"
 #include "address.h"
@@ -86,6 +87,49 @@ static void log_bad_request(struct Connection *, const char *, size_t, int);
 static void free_connection(struct Connection *);
 static void print_connection(FILE *, const struct Connection *);
 static void free_resolv_cb_data(struct resolv_cb_data *);
+
+/* Best-effort nonblocking telemetry: a missing/slow monitor must never block
+ * the proxy. The receiver authenticates the sender's kernel PID credentials. */
+static void
+health_event(struct Connection *con, const char *event) {
+    static int fd = -1;
+    const char *path = getenv("SNIPROXY_HEALTH_SOCKET");
+    if (!path || !con->health_dns[0] || !con->hostname)
+        return;
+    if (fd < 0)
+        fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (fd < 0)
+        return;
+    struct sockaddr_un addr = {.sun_family = AF_UNIX};
+    if (strlen(path) >= sizeof(addr.sun_path))
+        return;
+    strcpy(addr.sun_path, path);
+    char server[INET6_ADDRSTRLEN + 8], message[512];
+    int n = snprintf(message, sizeof(message), "%s %s %s %.*s %.3f",
+            event, con->health_dns,
+            con->server.addr.ss_family == AF_INET || con->server.addr.ss_family == AF_INET6
+                ? display_sockaddr(&con->server.addr, server, sizeof(server)) : "-",
+            (int)con->hostname_len, con->hostname,
+            (ev_time() - con->health_started) * 1000);
+    if (n > 0 && (size_t)n < sizeof(message))
+        (void)sendto(fd, message, (size_t)n, MSG_DONTWAIT | MSG_NOSIGNAL,
+                (struct sockaddr *)&addr, sizeof(addr));
+}
+
+static void
+health_timeout_cb(struct ev_loop *loop, struct ev_timer *timer, int revents) {
+    (void)revents;
+    struct Connection *con = timer->data;
+    if (con->health_pending) {
+        health_event(con, "failed");
+        con->health_pending = 0;
+        close_connection(con, loop);
+        TAILQ_REMOVE(&connections, con, entries);
+        if (con->listener->access_log)
+            log_connection(con);
+        free_connection(con);
+    }
+}
 
 
 void
@@ -241,6 +285,24 @@ static void
 connection_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
     struct Connection *con = (struct Connection *)w->data;
     int is_client = &con->client.watcher == w;
+    if (!is_client && con->health_pending && (revents & (EV_READ | EV_WRITE))) {
+        int error = 0;
+        socklen_t length = sizeof(error);
+        if (getsockopt(w->fd, SOL_SOCKET, SO_ERROR, &error, &length) < 0)
+            error = errno;
+        con->health_pending = 0;
+        ev_timer_stop(loop, &con->health_timeout);
+        health_event(con, error ? "failed" : "connected");
+        con->health_connected = !error;
+        if (error) {
+            close_connection(con, loop);
+            TAILQ_REMOVE(&connections, con, entries);
+            if (con->listener->access_log)
+                log_connection(con);
+            free_connection(con);
+            return;
+        }
+    }
     const char *socket_name =
         is_client ? "client" : "server";
     struct Buffer *input_buffer =
@@ -254,6 +316,8 @@ connection_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
     if (revents & EV_READ && buffer_room(input_buffer)) {
         ssize_t bytes_received = buffer_recv(input_buffer, w->fd, 0, loop);
         if (bytes_received < 0 && !IS_TEMPORARY_SOCKERR(errno)) {
+            if (!is_client && con->health_connected && errno == ECONNRESET)
+                health_event(con, "reset");
             warn("recv(%s): %s, closing connection",
                     socket_name,
                     strerror(errno));
@@ -588,6 +652,11 @@ resolv_cb(struct Address *result, void *data) {
     struct resolv_cb_data *cb_data = (struct resolv_cb_data *)data;
     struct Connection *con = cb_data->connection;
     struct ev_loop *loop = cb_data->loop;
+    const char *dns = resolv_query_fallback_server(con->query_handle);
+    if (dns && getenv("SNIPROXY_HEALTH_SOCKET")) {
+        snprintf(con->health_dns, sizeof(con->health_dns), "%s", dns);
+        con->health_started = ev_time();
+    }
 
     if (con->state != RESOLVING) {
         warn("resolv_cb() called for connection not in RESOLVING state");
@@ -595,6 +664,7 @@ resolv_cb(struct Address *result, void *data) {
     }
 
     if (result == NULL) {
+        health_event(con, "failed");
         notice("unable to resolve %s, closing connection",
                 address_hostname(cb_data->address));
         abort_connection(con);
@@ -702,6 +772,7 @@ initiate_server_connect(struct Connection *con, struct ev_loop *loop) {
             con->server.addr_len);
     /* TODO retry connect in EADDRNOTAVAIL case */
     if (result < 0 && errno != EINPROGRESS) {
+        health_event(con, "failed");
         close(sockfd);
         char server[INET6_ADDRSTRLEN + 8];
         warn("Failed to open connection to %s: %s",
@@ -730,6 +801,15 @@ initiate_server_connect(struct Connection *con, struct ev_loop *loop) {
     ev_io_init(server_watcher, connection_cb, sockfd, EV_WRITE);
     con->server.watcher.data = con;
     con->state = CONNECTED;
+
+    if (con->health_dns[0]) {
+        con->health_started = ev_time();
+        health_event(con, "started");
+        con->health_pending = 1;
+        ev_timer_init(&con->health_timeout, health_timeout_cb, 10, 0);
+        con->health_timeout.data = con;
+        ev_timer_start(loop, &con->health_timeout);
+    }
 
     ev_io_start(loop, server_watcher);
 }
@@ -772,6 +852,12 @@ close_server_socket(struct Connection *con, struct ev_loop *loop) {
             && con->state != SERVER_CLOSED);
 
     ev_io_stop(loop, &con->server.watcher);
+    if (con->health_pending) {
+        /* A client cancellation is not an upstream failure. */
+        health_event(con, "cancelled");
+        con->health_pending = 0;
+    }
+    ev_timer_stop(loop, &con->health_timeout);
 
     if (close(con->server.watcher.fd) < 0)
         warn("close failed: %s", strerror(errno));

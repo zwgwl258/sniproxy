@@ -4,6 +4,7 @@ After=network.target
 
 [Service]
 Type=exec
+Environment=SNIPROXY_HEALTH_SOCKET=/run/sniproxy-dns-health/events.sock
 ExecStart=/usr/local/lib/sniproxy-managed/sniproxy -f -c /etc/sniproxy-managed/sniproxy.conf
 
 [Install]

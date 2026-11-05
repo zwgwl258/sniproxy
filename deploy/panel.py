@@ -390,11 +390,17 @@ def dns_health_status():
 
 def dns_benchmark_status():
     try:
+        runtime = json.loads(Path("/run/sniproxy-dns-runtime").read_text(
+            encoding="utf-8").rsplit("\n", 1)[1])
+    except (OSError, ValueError, IndexError):
+        runtime = {}
+    runtime_active = 0 <= time.time() - runtime.get("time", 0) <= 45
+    try:
         report = json.loads(Path("/run/sniproxy-dns-benchmark").read_text(
             encoding="utf-8").rsplit("\n", 1)[1])
     except (OSError, ValueError, IndexError):
         return "<p>综合测速：等待本机代理测试。</p>"
-    if time.time() - report["time"] > 4500:
+    if time.time() - report["time"] > 4500 and not runtime_active:
         return "<p>逐域名测速结果已过期，暂按 DNS 探测结果选优。</p>"
     if not report.get("by_domain"):
         return "<p>逐域名测速未运行：需要可识别的已配置域名和兜底 DNS。</p>"
@@ -409,13 +415,32 @@ def dns_benchmark_status():
             coverage = group.get("coverage")
             result = f"{coverage}/{len(members)}" if coverage is not None else "—"
             reason = html.escape(group.get("reason", "旧报告，等待复测"))
+            live_group = runtime.get("groups", {}).get(key, {}) if runtime_active else {}
+            if live_group:
+                preferred = html.escape(live_group.get("preferred") or "暂无")
+                live = live_group.get("live", {})
+                completed = live.get("connected", 0) + live.get("failed", 0)
+                rate = f"{100 * live.get('connected', 0) / completed:.1f}%" if completed else "暂无样本"
+                upstreams = html.escape(", ".join(live.get("upstreams", [])) or "无")
+                standby = html.escape(", ".join(ip for ip in live_group.get("standby", [])
+                                              if ip != live_group.get("preferred")) or "待测速")
+                cooling = html.escape(", ".join(ip for ip, until in live_group.get("cooldown", {}).items()
+                                              if until > time.time()) or "无")
+                switched = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(live_group["switched"])) if live_group.get("switched") else "暂无"
+                reason = (html.escape(live_group.get("status", "等待监测")) +
+                          f"<br>近 60 秒 TCP 建连成功率：{rate}；待连接：{live.get('pending', 0)}" +
+                          f"；平均建连：{live.get('connect_ms') if live.get('connect_ms') is not None else '—'} ms" +
+                          f"<br>备用：{standby}；冷却中：{cooling}<br>异常上游：{upstreams}" +
+                          f"<br>最近切换：{switched}；" + html.escape(live_group.get("reason", "稳定保持")))
             diag = group.get("diagnostics")
             if diag:
                 reason += (f"；DNS 失败 {diag['dns_failed']}，连接/TLS 未获响应 {diag['transport_failed']}"
                            f"，HTTP 错误 {diag['http_failed']}")
             group_rows.append(f"<tr><td>{index}. {name}</td><td>{result}</td>"
                               f"<td>{preferred}</td><td>{reason}</td></tr>")
+        monitor = "运行中：约 15 秒检查，稳定优先，故障整组切换不重启" if runtime_active else "未收到有效心跳（实时熔断未生效）"
         overview = (f"<p><strong>已测速 DNS 分组：{len(groups)} 组</strong>（每 30 分钟）</p>"
+                    f"<p>实时监测：{monitor}。统计为尽力采样，TCP 成功不代表业务登录成功。</p>"
                     "<table><thead><tr><th>分组（首个可测速域名）</th><th>本轮通过</th>"
                     "<th>首选兜底 DNS</th><th>选用原因</th></tr></thead><tbody>"
                     + "".join(group_rows) + "</tbody></table>")

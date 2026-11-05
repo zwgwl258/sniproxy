@@ -58,6 +58,11 @@ struct Connection {
     struct ResolvQuery *query_handle;
     ev_tstamp established_timestamp;
     int use_proxy_header;
+    char health_dns[46];
+    int health_pending;
+    int health_connected;
+    ev_tstamp health_started;
+    struct ev_timer health_timeout;
 
     TAILQ_ENTRY(Connection) entries;
 };

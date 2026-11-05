@@ -223,6 +223,19 @@ def main():
                     strict.add(domain)
     if CONFIG.read_text(encoding="utf-8") != config:
         return
+    # Runtime failover owns the active route. A long-running benchmark must
+    # not undo a switch that happened while it was measuring candidates.
+    try:
+        runtime = json.loads(Path("/run/sniproxy-dns-runtime").read_text().rsplit("\n", 1)[1])
+    except (OSError, ValueError, IndexError):
+        runtime = {}
+    if time.time() - runtime.get("time", 0) <= 45:
+        for key, data in runtime.get("groups", {}).items():
+            if key in groups and data.get("preferred") in servers:
+                groups[key]["preferred"] = data["preferred"]
+                groups[key]["reason"] = "稳定优先：沿用实时监测当前 DNS"
+                for domain in key.split(","):
+                    by_domain[domain]["preferred"] = data["preferred"]
     report = dict(domains=domains, servers=servers, by_domain=by_domain, groups=groups, time=time.time())
     routes = "".join(f"{domain} {data['preferred']}{' !' if domain in strict else ''}\n" for domain, data in by_domain.items()
                      if data["preferred"])
