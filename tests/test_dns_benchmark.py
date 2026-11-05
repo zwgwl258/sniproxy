@@ -58,14 +58,15 @@ resolver {
         domains = ["ok.example", "failed.example", "other.example"]
         with patch.object(benchmark.subprocess, "Popen") as process, \
                 patch.object(benchmark.socket, "create_connection"), \
-                patch.object(benchmark, "dns_ms", side_effect=lambda server, domain:
-                             None if domain == "failed.example" else 10), \
+                patch.object(benchmark, "dns_probe", side_effect=lambda server, domain:
+                             (None, []) if domain == "failed.example" else (10, ["192.0.2.2"])), \
                 patch.object(benchmark, "proxy_probe", return_value=(25, 200)) as probe:
             process.return_value.__enter__.return_value.poll.return_value = None
             result = benchmark.measure("192.0.2.1", domains)
         self.assertEqual(result, {"dns": [10, None, 10],
                                   "proxy": [25, None, 25],
-                                  "status": [200, 0, 200]})
+                                  "status": [200, 0, 200],
+                                  "addresses": [["192.0.2.2"], [], ["192.0.2.2"]]})
         self.assertEqual(probe.call_count, 2)
 
 

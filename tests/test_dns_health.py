@@ -64,6 +64,15 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(stats["pending"], 0)
         self.assertFalse(health.suspicious(stats))
 
+    def test_different_dns_with_same_failing_upstream_is_not_a_backup(self):
+        def probe(server, domains):
+            return dict(proxy=[None if server == "a" else 10 for _ in domains],
+                        addresses=[["192.0.2.99"] for _ in domains])
+        self.policy = health.Policy(probe)
+        self.check()
+        self.assertFalse(self.check())
+        self.assertEqual(self.group["preferred"], "a")
+
 
 if __name__ == "__main__":
     unittest.main()

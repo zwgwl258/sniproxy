@@ -39,17 +39,23 @@ def command(*args, timeout=5):
         return ""
 
 
-def dns_ms(server, domain):
+def dns_probe(server, domain):
     started = time.monotonic()
     answer = command("dig", "-r", "@" + server, domain + ".", "A", "+short",
                      "+time=2", "+tries=1", timeout=3)
+    addresses = []
     for line in answer.splitlines():
         try:
             ipaddress.IPv4Address(line)
         except ValueError:
             continue
-        return round((time.monotonic() - started) * 1000)
-    return None
+        if line not in addresses:
+            addresses.append(line)
+    return (round((time.monotonic() - started) * 1000), addresses) if addresses else (None, [])
+
+
+def dns_ms(server, domain):
+    return dns_probe(server, domain)[0]
 
 
 def proxy_probe(port, domain):
@@ -73,7 +79,7 @@ def proxy_ms(port, domain):
 
 
 def measure(server, domains):
-    dns, proxy, status = [], [], []
+    dns, proxy, status, addresses = [], [], [], []
     with tempfile.TemporaryDirectory() as tmp:
         config = Path(tmp) / "probe.conf"
         with socket.socket() as listener:
@@ -95,16 +101,17 @@ def measure(server, domains):
                     except OSError:
                         time.sleep(0.05)
                 def probe(domain):
-                    latency = dns_ms(server, domain)
+                    latency, answer = dns_probe(server, domain)
                     # An unanswered DNS lookup cannot produce a useful proxy test.
                     elapsed, code = proxy_probe(port, domain) if latency is not None and proc.poll() is None else (None, 0)
-                    return latency, elapsed, code
+                    return latency, elapsed, code, answer
                 # One proxy process per DNS, with a bounded global request budget.
                 with ThreadPoolExecutor(max_workers=4) as pool:
-                    for latency, elapsed, code in pool.map(probe, domains):
+                    for latency, elapsed, code, answer in pool.map(probe, domains):
                         dns.append(latency)
                         proxy.append(elapsed)
                         status.append(code)
+                        addresses.append(answer)
             finally:
                 if proc.poll() is None:
                     proc.terminate()
@@ -112,7 +119,7 @@ def measure(server, domains):
                         proc.wait(timeout=1)
                     except subprocess.TimeoutExpired:
                         proc.kill()
-    return {"dns": dns, "proxy": proxy, "status": status}
+    return {"dns": dns, "proxy": proxy, "status": status, "addresses": addresses}
 
 
 def summarize(rounds, servers):
@@ -183,7 +190,7 @@ def main():
             preferred, pending = select(scores, prior.get("preferred"), prior.get("pending"), sample)
             by_domain[domain] = dict(rounds=rounds, scores=scores, preferred=preferred, pending=pending)
         blocks = domain_blocks(config)
-        if len(blocks) > 1:
+        if blocks:
             for block in blocks:
                 members = list(dict.fromkeys(domain_name(rule).lower() for rule in block
                                              if domain_name(rule).lower() in latest))
@@ -233,8 +240,18 @@ def main():
     if time.time() - runtime.get("time", 0) <= 45:
         for key, data in runtime.get("groups", {}).items():
             if key in groups and data.get("preferred") in servers:
-                groups[key]["preferred"] = data["preferred"]
-                groups[key]["reason"] = "稳定优先：沿用实时监测当前 DNS"
+                group = groups[key]
+                preferred = data["preferred"]
+                group["preferred"] = preferred
+                group["reason"] = "稳定优先：沿用实时监测当前 DNS"
+                sample = group["rounds"][-1]
+                group["coverage"] = sum(ms is not None for ms in sample[preferred]["proxy"])
+                group["standby"] = standby_order(summarize(group["rounds"], servers), sample, preferred)
+                group["diagnostics"] = dict(
+                    dns_failed=sum(ms is None for ms in sample[preferred]["dns"]),
+                    transport_failed=sum(latest[d][preferred]["status"][0] == 0 and
+                                         latest[d][preferred]["dns"][0] is not None for d in key.split(",")),
+                    http_failed=sum(latest[d][preferred]["status"][0] >= 400 for d in key.split(",")))
                 for domain in key.split(","):
                     by_domain[domain]["preferred"] = data["preferred"]
     report = dict(domains=domains, servers=servers, by_domain=by_domain, groups=groups,

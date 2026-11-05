@@ -61,6 +61,7 @@ struct Connection {
     char health_dns[46];
     int health_pending;
     int health_connected;
+    int health_client_failed;
     ev_tstamp health_started;
     struct ev_timer health_timeout;
 

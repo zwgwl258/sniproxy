@@ -91,7 +91,12 @@ class Policy:
             group["status"] = "真实连接异常，但原线路复测通过；保留并告警"
             group["checks"] = 0
             return False
-        healthy = [ip for ip in candidates if passed(ip)]
+        bad_addresses = {address for run in results[current]
+                         for i, answers in enumerate(run.get("addresses", []))
+                         if run["proxy"][i] is None for address in answers}
+        healthy = [ip for ip in candidates if passed(ip) and not any(
+            bad_addresses.intersection(answers) for run in results[ip]
+            for answers in run.get("addresses", []))]
         group["last_probe"] = now
         if not healthy:
             group["status"] = "故障告警：备用未连续通过，保留当前 DNS"
