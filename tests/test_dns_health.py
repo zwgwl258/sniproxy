@@ -73,6 +73,15 @@ class HealthTests(unittest.TestCase):
         self.assertFalse(self.check())
         self.assertEqual(self.group["preferred"], "a")
 
+    def test_expected_api_http_errors_are_not_transport_outages(self):
+        def probe(server, domains):
+            return dict(proxy=[None for _ in domains],
+                        status=[403 if server == "b" else 0 for _ in domains])
+        self.policy = health.Policy(probe)
+        self.check()
+        self.assertTrue(self.check())
+        self.assertEqual(self.group["preferred"], "b")
+
 
 if __name__ == "__main__":
     unittest.main()

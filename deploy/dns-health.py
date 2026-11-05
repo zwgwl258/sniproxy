@@ -86,7 +86,9 @@ class Policy:
         with ThreadPoolExecutor(max_workers=4) as pool:
             results = dict(zip([current, *candidates], pool.map(verify, [current, *candidates])))
         def passed(server):
-            return all(all(ms is not None for ms in r["proxy"]) for r in results[server])
+            # An API's expected 401/403/404/405 is not a TCP/TLS outage.
+            return all(all(ms is not None or 100 <= r.get("status", [0] * len(r["proxy"]))[i] < 500
+                           for i, ms in enumerate(r["proxy"])) for r in results[server])
         if passed(current):
             group["status"] = "真实连接异常，但原线路复测通过；保留并告警"
             group["checks"] = 0
