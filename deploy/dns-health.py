@@ -170,6 +170,22 @@ def main():
                 while events and events[0][0] < started - 60:
                     events.popleft()
                 window = list(events)
+            # Classify each sample once; do not scan the full traffic window
+            # separately for every domain in every group.
+            owners = {}
+            for block in blocks:
+                names = list(dict.fromkeys(domain_name(r).lower() for r in block
+                                           if domain_name(r).lower() in domains))
+                for name in names:
+                    owners[name] = ",".join(names)
+            group_events = {}
+            for event in window:
+                host = event[4]
+                while host:
+                    if host in owners:
+                        group_events.setdefault(owners[host], []).append(event)
+                        break
+                    host = host.partition(".")[2]
             for block in blocks:
                 members = list(dict.fromkeys(domain_name(r).lower() for r in block
                                              if domain_name(r).lower() in domains))
@@ -183,8 +199,7 @@ def main():
                 if group.get("preferred") not in servers:
                     continue
                 group["standby"] = measured.get("standby", group.get("standby", []))
-                selected = [e for e in window if e[5] == group["preferred"] and
-                            any(e[4] == d or e[4].endswith("." + d) for d in members)]
+                selected = [e for e in group_events.get(key, []) if e[5] == group["preferred"]]
                 failing = list(dict.fromkeys(e[4] for e in selected if e[1] in ("failed", "reset")))
                 stats = metrics(selected)
                 policy.check(key, group, stats, failing, servers, now, allow_probe=False)
