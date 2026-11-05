@@ -27,14 +27,14 @@ with tempfile.TemporaryDirectory() as directory:
         worker = Thread(target=server.serve_forever, daemon=True)
         worker.start()
 
-        def request(form=None, auth=True, follow=True):
+        def request(form=None, auth=True, follow=True, path="/"):
             # Trust only the ephemeral test certificate.
             tls = ssl.create_default_context(cafile=str(root / "cert"))
             conn = http.client.HTTPSConnection("localhost", server.server_port,
                                                context=tls, timeout=5)
             try:
                 headers = {"Authorization": server.authorization.decode()} if auth else {}
-                conn.request("GET" if form is None else "POST", "/",
+                conn.request("GET" if form is None else "POST", path,
                              urlencode(form) if form is not None else None, headers)
                 response = conn.getresponse()
                 body = response.read().decode()
@@ -60,6 +60,19 @@ with tempfile.TemporaryDirectory() as directory:
                  patch.object(panel, "restart", return_value=True) as restart:
                 assert request(auth=False)[0] == 401
                 assert "old" in request()[1]
+                with patch.object(panel, "current_clients", return_value=({"198.51.100.2": 4}, "")):
+                    assert request(auth=False, path="/clients")[0] == 401
+                    assert "客户端 IP 监控" in request(path="/clients")[1]
+                    white = dict(action="whitelist", nonce=panel.NONCE, ip="198.51.100.2", mode="unknown")
+                    assert "已加入白名单" in request(white, path="/clients")[1]
+                    assert panel.client_whitelist() == {"198.51.100.2"}
+                    filtered = request(path="/clients?mode=unknown")[1].split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+                    assert "198.51.100.2" not in filtered
+                    white.update(action="unwhitelist")
+                    assert "已移出白名单" in request(white, path="/clients")[1]
+                    assert panel.client_whitelist() == set()
+                    assert config.read_bytes() == b"old"
+                    restart.assert_not_called()
                 form = {"action": "apply", "nonce": "wrong", "config": "new"}
                 assert "本次操作未执行" in request(form)[1] and config.read_bytes() == b"old"
                 form["nonce"] = panel.NONCE

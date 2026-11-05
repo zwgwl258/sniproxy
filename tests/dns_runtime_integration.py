@@ -106,6 +106,13 @@ table {{
                     assert request(listen, "127.0.0.1") == "127.0.0.11"
                     assert persistent_request() == "127.0.0.10", "Existing connection was interrupted"
                     assert proc.poll() is None, "Production PID changed or exited"
+                    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "deploy"))
+                    from panel import client_connections
+                    counts, listening = client_connections(subprocess.check_output(
+                        ["ss", "-H", "-ntap"], text=True), proc.pid)
+                    assert listening and counts.get("127.0.0.1", 0) >= 1, counts
+                    assert "127.0.0.10" not in counts and "127.0.0.11" not in counts, counts
+                    print("PASS: client monitor counts real incoming sockets, excluding upstreams")
                     # Exercise the authenticated receiver and automatic policy
                     # publisher. Synthetic active-probe results are controlled;
                     # real HTTPS probing is covered by dns_benchmark_integration.

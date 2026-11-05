@@ -13,7 +13,7 @@ jobs:
           sudo ip addr add 81.2.69.160/32 dev lo
           sudo ip addr add 81.2.69.161/32 dev lo
           sudo SNIPROXY_TEST_BENCHMARK_SWITCH=1 SNIPROXY_COUNTRY_DB=/tmp/test-country.mmdb python3 tests/client_dns_integration.py ./src/sniproxy
-      - run: python3 tests/test_dns_benchmark.py && python3 tests/test_dns_health.py && sudo python3 tests/dns_benchmark_integration.py ./src/sniproxy && sudo python3 tests/dns_runtime_integration.py ./src/sniproxy
+      - run: python3 tests/test_client_monitor.py && python3 tests/test_dns_benchmark.py && python3 tests/test_dns_health.py && sudo python3 tests/dns_benchmark_integration.py ./src/sniproxy && sudo python3 tests/dns_runtime_integration.py ./src/sniproxy
       - run: bash -n deploy/install.sh && python3 deploy/test_panel.py
       - name: Install and verify the systemd services
         run: |
@@ -62,7 +62,7 @@ jobs:
             printf "%s\n" "Acquire::https::CaInfo \"/ci-ca.crt\";" "Acquire::https::No-Cache \"true\";" "Acquire::Retries \"3\";" > /etc/apt/apt.conf.d/99ci
             apt-get update
             apt-get -y --allow-downgrades dist-upgrade
-            apt-get install -y --allow-downgrades --no-install-recommends build-essential autoconf automake libev-dev libpcre2-dev libudns-dev libmaxminddb-dev dnsutils python3 openssl curl ca-certificates
+            apt-get install -y --allow-downgrades --no-install-recommends build-essential autoconf automake libev-dev libpcre2-dev libudns-dev libmaxminddb-dev dnsutils python3 openssl curl ca-certificates iproute2
             autoconf --version
             mkdir /build
             cp -a /source/. /build/
@@ -73,6 +73,7 @@ jobs:
             make -C tests config_test
             python3 tests/test_dns_benchmark.py
             python3 tests/test_dns_health.py
+            python3 tests/test_client_monitor.py
             python3 tests/dns_benchmark_integration.py ./src/sniproxy
             python3 tests/dns_runtime_integration.py ./src/sniproxy
           '

@@ -20,7 +20,7 @@ if [[ -n ${PANEL_CERT:-} || -n ${PANEL_KEY:-} ]]; then
 fi
 
 apt-get update
-apt-get install -y build-essential autoconf automake libev-dev libpcre2-dev libudns-dev libmaxminddb-dev mmdb-bin dnsutils curl gzip python3 openssl
+apt-get install -y build-essential autoconf automake libev-dev libpcre2-dev libudns-dev libmaxminddb-dev mmdb-bin dnsutils curl gzip python3 openssl iproute2
 autoreconf -fi
 ./configure --enable-dns
 make -j"$(nproc)"

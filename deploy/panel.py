@@ -15,7 +15,7 @@ import ssl
 import subprocess
 import tempfile
 import time
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, urlencode
 
 ROOT = Path("/etc/sniproxy-managed")
 CONFIG = ROOT / "sniproxy.conf"
@@ -348,6 +348,129 @@ COUNTRY_SCRIPT_HASH = base64.b64encode(hashlib.sha256(COUNTRY_SCRIPT.encode()).d
 
 def command(*args):
     return subprocess.run(args, capture_output=True, text=True, timeout=20)
+
+
+def client_ip(value):
+    address = ipaddress.ip_address(value.strip())
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return str(address)
+
+
+def client_whitelist():
+    path = ROOT / "client-whitelist.json"
+    if not path.exists():
+        return set()
+    values = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(values, list) or not all(isinstance(ip, str) for ip in values):
+        raise ValueError("客户端白名单文件格式无效，未覆盖原文件。")
+    return {client_ip(ip) for ip in values}
+
+
+def update_client_whitelist(value, remove=False):
+    address = client_ip(value)
+    allowed = client_whitelist()
+    if remove:
+        allowed.discard(address)
+    else:
+        allowed.add(address)
+    ordered = sorted(allowed, key=lambda ip: (ipaddress.ip_address(ip).version,
+                                            int(ipaddress.ip_address(ip))))
+    atomic_write(ROOT / "client-whitelist.json", json.dumps(ordered).encode(), mode=0o600)
+
+
+def client_connections(output, pid):
+    """ss -H -ntap includes state. Match the production PID's listening sockets,
+    not ephemeral outbound sockets or separate benchmark proxy processes."""
+    rows = [line.split() for line in output.splitlines()
+            if re.search(rf"\bpid={pid},", line)]
+    def endpoint(value):
+        host, _, port = value.rpartition(":")
+        return ("*" if host.strip("[]") == "*" else client_ip(host.strip("[]"))), int(port)
+    listeners = set()
+    for row in rows:
+        if len(row) >= 6 and row[0] == "LISTEN":
+            listeners.add(endpoint(row[3]))
+    counts = {}
+    for row in rows:
+        if len(row) < 6 or row[0] != "ESTAB":
+            continue
+        local, port = endpoint(row[3])
+        if not any(port == listening_port and (host == "*" or host == local or
+                   ipaddress.ip_address(host).is_unspecified) for host, listening_port in listeners):
+            continue
+        peer, _ = endpoint(row[4])
+        counts[peer] = counts.get(peer, 0) + 1
+    return counts, bool(listeners)
+
+
+def current_clients():
+    result = command("systemctl", "show", "-p", "MainPID", "--value", SERVICE)
+    if result.returncode or not result.stdout.strip().isdigit():
+        raise ValueError("无法读取生产 SNIProxy 主进程，请检查服务状态。")
+    pid = int(result.stdout.strip())
+    if not pid:
+        return {}, "代理未运行。"
+    result = command("ss", "-H", "-ntap")
+    if result.returncode:
+        raise ValueError("无法读取 TCP 连接，请确认已安装 iproute2 且面板有读取权限。")
+    counts, listening = client_connections(result.stdout, pid)
+    return counts, "" if listening else "当前未识别到生产代理的 TCP 监听；不统计其他进程或上游连接。"
+
+
+def client_monitor_page(mode="all", query="", page=1, message=""):
+    mode = "unknown" if mode == "unknown" else "all"
+    query = query.strip()[:128]
+    try:
+        allowed = client_whitelist()
+        counts, warning = current_clients()
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        allowed, counts, warning = set(), {}, f"读取失败：{error}"
+    visible = [(ip, count) for ip, count in counts.items()
+               if (mode == "all" or ip not in allowed) and query.lower() in ip.lower()]
+    visible.sort(key=lambda pair: (-pair[1], pair[0]))
+    pages = max(1, (len(visible) + 49) // 50)
+    page = max(1, min(page, pages))
+    def link(number):
+        return html.escape("/clients?" + urlencode(dict(mode=mode, q=query, page=number)), quote=True)
+    def action(ip, remove=False):
+        return (f'<form method="post" action="/clients"><input type="hidden" name="nonce" value="{NONCE}">'
+                f'<input type="hidden" name="mode" value="{mode}">'
+                f'<input type="hidden" name="ip" value="{html.escape(ip, quote=True)}">'
+                f'<button name="action" value="{"unwhitelist" if remove else "whitelist"}">'
+                f'{"移出白名单" if remove else "加入白名单"}</button></form>')
+    rows = "".join(f"<tr><td>{html.escape(ip)}</td><td>{count}</td>"
+                   f"<td>{'白名单' if ip in allowed else '未加白'}</td><td>{action(ip, ip in allowed)}</td></tr>"
+                   for ip, count in visible[(page - 1) * 50:page * 50])
+    white_rows = "".join(f"<tr><td>{html.escape(ip)}</td><td>{counts.get(ip, 0)}</td>"
+                         f"<td>{action(ip, True)}</td></tr>" for ip in sorted(allowed))
+    return f"""<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>客户端 IP 监控</title><style>
+body{{max-width:960px;margin:2rem auto;padding:0 1rem;font:16px system-ui}}
+table{{width:100%;border-collapse:collapse}}td,th{{text-align:left;padding:.6rem;border-bottom:1px solid #dde3eb}}
+button,input,select{{padding:.5rem;margin:.3rem}}section,details{{padding:1rem;border:1px solid #ccd5df;border-radius:.6rem;margin:1rem 0}}
+.scroll{{max-height:32rem;overflow:auto}}small{{display:block;color:#435264}}a{{margin-right:1rem}}
+</style><a href="/">返回管理首页</a><h1>客户端 IP 监控</h1>
+<p>{html.escape(message)}</p><p>{html.escape(warning)}</p>
+<small>仅显示当前已建立的客户端 TCP 连接，不是历史访问记录。白名单只用于显示筛选，不是防火墙，不限制其他 IP 接入；不修改代理配置、不重启。</small>
+<section><form method="get" action="/clients"><label>显示方式 <select name="mode">
+<option value="all" {'selected' if mode == 'all' else ''}>全部 IP</option>
+<option value="unknown" {'selected' if mode == 'unknown' else ''}>排除白名单 IP</option></select></label>
+<input type="search" name="q" value="{html.escape(query, quote=True)}" placeholder="搜索客户端 IP" maxlength="128">
+<button>筛选并刷新</button></form>
+<p>当前共 {len(counts)} 个客户端 IP、{sum(counts.values())} 条连接；未加白 {len(set(counts) - allowed)} 个 IP；白名单 {len(allowed)} 个 IP。</p>
+<small>服务器快照时间：{time.strftime('%Y-%m-%d %H:%M:%S %z')}，手动刷新，不自动定时刷新。</small>
+<div class="scroll"><table><thead><tr><th>客户端 IP</th><th>连接数</th><th>状态</th><th>操作</th></tr></thead><tbody>
+{rows or '<tr><td colspan="4">当前筛选无匹配 IP。</td></tr>'}</tbody></table></div>
+<p>第 {page} / {pages} 页 · 匹配 {len(visible)} 个 IP（每页 50 个）</p>
+<a href="{link(max(1, page - 1))}">上一页</a><a href="{link(min(pages, page + 1))}">下一页</a></section>
+<details><summary>管理白名单（{len(allowed)} 个 IP，含当前未连接的节点）</summary>
+<form method="post" action="/clients"><input type="hidden" name="nonce" value="{NONCE}">
+<input type="hidden" name="mode" value="{mode}"><input name="ip" placeholder="输入一个 IPv4 或 IPv6 地址" required>
+<button name="action" value="whitelist">加入白名单</button></form>
+<div class="scroll"><table><thead><tr><th>白名单 IP</th><th>当前连接数</th><th>操作</th></tr></thead>
+<tbody>{white_rows or '<tr><td colspan="3">白名单为空。</td></tr>'}</tbody></table></div></details></html>"""
 
 
 def dns_health_status():
@@ -746,6 +869,12 @@ class Panel(BaseHTTPRequestHandler):
                 self.reply(303, Location="/")
                 return False
             return True
+        if ((self.command == "GET" and urlsplit(self.path).path == "/clients") or
+                (self.command == "POST" and self.path == "/clients")):
+            if (ROOT / "password-change-required").is_file():
+                self.reply(303, Location="/")
+                return False
+            return True
         if self.path != "/" and not (self.command == "GET" and
                 re.fullmatch(r"/\?result=[A-Za-z0-9_-]{22}", self.path)):
             self.reply(404)
@@ -814,6 +943,7 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 .panel-header a{{padding:.55rem .8rem;border:1px solid #a5b8cc;border-radius:.45rem;color:#194b79;text-decoration:none}}
 .panel-header a:hover{{background:#edf5ff}}
 </style><header class="panel-header"><h1>SNIProxy 管理</h1>
+<a href="/clients">客户端 IP 监控</a>
 <a href="{adguard_link}" {'target="_blank" rel="noopener noreferrer"' if integrated or adguard_url else ""}>AdGuard Home 管理</a></header><p>代理状态：{status}</p><pre>{message}</pre>
 <section><h2>域名转发</h2>
 <form method="post" action="/">
@@ -878,12 +1008,12 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 <button name="action" value="logs">查看最近日志</button>
 </form><script>{COUNTRY_SCRIPT}</script></html>""")
 
-    def form_result(self, message, draft=None):
+    def form_result(self, message, draft=None, target="/"):
         token = secrets.token_urlsafe(16)
         if len(FORM_RESULTS) >= 16:
             FORM_RESULTS.pop(next(iter(FORM_RESULTS)))
         FORM_RESULTS[token] = (message, draft)
-        self.reply(303, Location=f"/?result={token}")
+        self.reply(303, Location=f"{target}{'&' if '?' in target else '?'}result={token}")
 
     def proxy_adguard(self):
         if not (ROOT / "adguard-integrated").is_file():
@@ -947,6 +1077,15 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
         if self.authorized():
             if self.path.startswith("/adguard/"):
                 return self.proxy_adguard()
+            if urlsplit(self.path).path == "/clients":
+                try:
+                    query = parse_qs(urlsplit(self.path).query, max_num_fields=8)
+                    page = int(query.get("page", ["1"])[0])
+                except ValueError:
+                    return self.reply(400)
+                message, _ = FORM_RESULTS.pop(query.get("result", [""])[0], ("", None))
+                return self.reply(200, client_monitor_page(query.get("mode", ["all"])[0],
+                                  query.get("q", [""])[0], page, message))
             token = self.path.partition("?result=")[2]
             self.page(*FORM_RESULTS.pop(token, ("", None)))
 
@@ -968,6 +1107,16 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
         action = form.get("action", [""])[0]
         if action != "change_password" and (ROOT / "password-change-required").is_file():
             return self.form_result("请先修改初始密码。")
+        if self.path == "/clients":
+            if action not in ("whitelist", "unwhitelist"):
+                return self.reply(400)
+            try:
+                update_client_whitelist(form.get("ip", [""])[0], remove=action == "unwhitelist")
+                message = "已加入白名单（仅用于筛选显示）。" if action == "whitelist" else "已移出白名单。"
+            except (OSError, ValueError) as error:
+                message = f"白名单未保存：{error}"
+            mode = "unknown" if form.get("mode", [""])[0] == "unknown" else "all"
+            return self.form_result(message, target=f"/clients?mode={mode}")
         try:
             if action == "apply":
                 data = form["config"][0].replace("\r\n", "\n").encode()

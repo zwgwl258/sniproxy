@@ -32,6 +32,9 @@ f=$(mktemp) && curl -fLsS 'https://raw.githubusercontent.com/zwgwl258/sniproxy/b
 | 全局兜底 DNS | 每行一个 DNS IP，不设固定条数上限。未命中分流规则时直接使用；客户端专用组未返回可用地址时也会尝试。清空并保存后恢复默认 DNS。 |
 | 高级配置 | 修改监听地址、默认 DNS 或自定义转发表。可校验并应用、查看日志、重启及恢复上一版配置。 |
 | AdGuard Home | 点击标题旁的「AdGuard Home 管理」进入同一 HTTPS 地址的 `/adguard/`。融合模式不用填写单独的后台地址。 |
+| 客户端 IP 监控 | 点击标题旁的「客户端 IP 监控」，查看当前已建立连接的来源 IP 和连接数；支持搜索、分页，以及「全部 IP／排除白名单 IP」两种显示方式。可逐个加白、移除，或手动添加 IPv4／IPv6。白名单仅用于显示筛选，不是防火墙，不阻止其他 IP 连接；修改白名单不重启代理。 |
+
+客户端监控按生产 SNIProxy 主进程及实际监听端口统计，不把上游连接或测速进程算作客户端。页面手动刷新，无两分钟自动刷新，也不保存历史访问记录。白名单保存于 `/etc/sniproxy-managed/client-whitelist.json`，升级保留。
 
 客户端来源以代理实际看到的 TCP 来源 IP 为准。匹配优先级：**IP／网段 → 国家／地区 → 全局兜底 DNS（未设置则用默认 DNS）**。安装器自动下载并校验 [DB-IP Country Lite](https://db-ip.com/db/download/ip-to-country-lite)。健康的客户端专用 DNS 不受全局分组熔断影响；它们全部 DNS 探测失败后才进入兜底。
 
