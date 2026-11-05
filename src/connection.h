@@ -58,6 +58,7 @@ struct Connection {
     struct ResolvQuery *query_handle;
     ev_tstamp established_timestamp;
     int use_proxy_header;
+    struct TrafficCounter *traffic;
     char health_dns[46];
     int health_pending;
     int health_connected;
@@ -69,6 +70,7 @@ struct Connection {
 };
 
 void init_connections(void);
+void open_traffic(void);
 int accept_connection(struct Listener *, struct ev_loop *);
 void free_connections(struct ev_loop *);
 void print_connections(void);

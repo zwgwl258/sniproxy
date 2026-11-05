@@ -136,7 +136,8 @@ table_lookup_server_address(const struct Table *table, const char *name, size_t 
         return (struct LookupResult){.address = NULL};
     }
 
-    return (struct LookupResult){.address = b->address,
+    return (struct LookupResult){.pattern = b->pattern, .table_name = table->name,
+                                 .address = b->address,
                                  .use_proxy_header = b->use_proxy_header};
 }
 

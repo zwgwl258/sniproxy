@@ -63,6 +63,113 @@ struct resolv_cb_data {
 
 static TAILQ_HEAD(ConnectionHead, Connection) connections;
 
+struct TrafficCounter {
+    char *pattern, *table;
+    uint64_t up, down, previous_up, previous_down;
+    struct TrafficCounter *next;
+};
+static struct TrafficCounter *traffic_counters;
+static int traffic_fd = -1;
+static uint64_t traffic_epoch, traffic_sequence;
+static ev_tstamp traffic_previous;
+static struct ev_timer traffic_timer;
+
+void
+open_traffic(void) {
+    const char *path = getenv("SNIPROXY_TRAFFIC_FILE");
+    if (!path)
+        return;
+    /* Open before dropping privileges. /run remains root-owned; the worker
+     * retains this descriptor, not directory write privileges. */
+    traffic_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (traffic_fd < 0) {
+        warn("Unable to open traffic counters: %s", strerror(errno));
+        return;
+    }
+    traffic_epoch = (uint64_t)(ev_time() * 1000000);
+    traffic_previous = ev_time();
+}
+
+static struct TrafficCounter *
+traffic_counter(const char *pattern, const char *table) {
+    if (traffic_fd < 0)
+        return NULL;
+    pattern = pattern ? pattern : "";
+    table = table ? table : "";
+    for (struct TrafficCounter *c = traffic_counters; c; c = c->next)
+        if (!strcmp(c->pattern, pattern) && !strcmp(c->table, table))
+            return c;
+    struct TrafficCounter *c = calloc(1, sizeof(*c));
+    if (!c)
+        return NULL;
+    c->pattern = strdup(pattern);
+    c->table = strdup(table);
+    if (!c->pattern || !c->table) {
+        free(c->pattern); free(c->table); free(c);
+        return NULL;
+    }
+    c->next = traffic_counters;
+    traffic_counters = c;
+    return c;
+}
+
+static void
+traffic_hex(FILE *out, const char *value) {
+    if (!*value) {
+        fputc('-', out);
+        return;
+    }
+    for (const unsigned char *p = (const unsigned char *)value; *p; p++)
+        fprintf(out, "%02x", *p);
+}
+
+static void
+traffic_snapshot(struct ev_loop *loop, struct ev_timer *timer, int revents) {
+    (void)loop; (void)timer; (void)revents;
+    if (traffic_fd < 0)
+        return;
+    char header[64];
+    memset(header, ' ', sizeof(header));
+    uint64_t sequence = (traffic_sequence += 2);
+    snprintf(header, sizeof(header), "%020llu %010ld %020llu\n",
+            (unsigned long long)(sequence - 1), (long)getpid(), (unsigned long long)traffic_epoch);
+    if (pwrite(traffic_fd, header, sizeof(header), 0) != sizeof(header))
+        return;
+    int copy = dup(traffic_fd);
+    if (copy < 0)
+        return;
+    FILE *out = fdopen(copy, "w");
+    if (!out) {
+        close(copy);
+        return;
+    }
+    double now = ev_time();
+    fseek(out, 64, SEEK_SET);
+    fprintf(out, "%.6f %.6f\n", now, now - traffic_previous);
+    for (struct TrafficCounter *c = traffic_counters; c; c = c->next) {
+        traffic_hex(out, c->table); fputc(' ', out); traffic_hex(out, c->pattern);
+        fprintf(out, " %llu %llu %llu %llu\n", (unsigned long long)c->up,
+                (unsigned long long)c->down, (unsigned long long)(c->up - c->previous_up),
+                (unsigned long long)(c->down - c->previous_down));
+    }
+    int ok = fflush(out) == 0 && !ferror(out);
+    long end = ftell(out);
+    if (end < 64 || ftruncate(traffic_fd, end) < 0)
+        ok = 0;
+    if (fclose(out) != 0 || !ok)
+        return;
+    memset(header, ' ', sizeof(header));
+    snprintf(header, sizeof(header), "%020llu %010ld %020llu\n",
+            (unsigned long long)sequence, (long)getpid(), (unsigned long long)traffic_epoch);
+    if (pwrite(traffic_fd, header, sizeof(header), 0) != sizeof(header))
+        return;
+    for (struct TrafficCounter *c = traffic_counters; c; c = c->next) {
+        c->previous_up = c->up;
+        c->previous_down = c->down;
+    }
+    traffic_previous = now;
+}
+
 
 static inline int client_socket_open(const struct Connection *);
 static inline int server_socket_open(const struct Connection *);
@@ -144,6 +251,10 @@ health_timeout_cb(struct ev_loop *loop, struct ev_timer *timer, int revents) {
 void
 init_connections(void) {
     TAILQ_INIT(&connections);
+    if (traffic_fd >= 0) {
+        ev_timer_init(&traffic_timer, traffic_snapshot, 1, 5);
+        ev_timer_start(EV_DEFAULT, &traffic_timer);
+    }
 }
 
 /**
@@ -224,6 +335,17 @@ free_connections(struct ev_loop *loop) {
         TAILQ_REMOVE(&connections, iter, entries);
         close_connection(iter, loop);
         free_connection(iter);
+    }
+    if (traffic_fd >= 0) {
+        ev_timer_stop(loop, &traffic_timer);
+        traffic_snapshot(loop, &traffic_timer, 0);
+        close(traffic_fd);
+        traffic_fd = -1;
+    }
+    while (traffic_counters) {
+        struct TrafficCounter *next = traffic_counters->next;
+        free(traffic_counters->pattern); free(traffic_counters->table); free(traffic_counters);
+        traffic_counters = next;
     }
 }
 
@@ -344,6 +466,12 @@ connection_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
     /* Transmit */
     if (revents & EV_WRITE && buffer_len(output_buffer)) {
         ssize_t bytes_transmitted = buffer_send(output_buffer, w->fd, 0, loop);
+        if (bytes_transmitted > 0 && con->traffic) {
+            if (is_client)
+                con->traffic->down += (uint64_t)bytes_transmitted;
+            else
+                con->traffic->up += (uint64_t)bytes_transmitted;
+        }
         if (bytes_transmitted < 0 && !IS_TEMPORARY_SOCKERR(errno)) {
             if (!is_client && con->health_connected && errno == ECONNRESET)
                 health_event(con, "reset");
@@ -569,6 +697,7 @@ static void
 resolve_server_address(struct Connection *con, struct ev_loop *loop) {
     struct LookupResult result =
         listener_lookup_server_address(con->listener, con->hostname, con->hostname_len);
+    con->traffic = traffic_counter(result.pattern, result.table_name);
 
     if (result.address == NULL) {
         abort_connection(con);

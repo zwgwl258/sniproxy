@@ -46,6 +46,8 @@ struct Table {
 };
 
 struct LookupResult {
+    const char *pattern;
+    const char *table_name;
     const struct Address *address;
     int caller_free_address;
     int use_proxy_header;

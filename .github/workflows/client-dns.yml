@@ -13,7 +13,7 @@ jobs:
           sudo ip addr add 81.2.69.160/32 dev lo
           sudo ip addr add 81.2.69.161/32 dev lo
           sudo SNIPROXY_TEST_BENCHMARK_SWITCH=1 SNIPROXY_COUNTRY_DB=/tmp/test-country.mmdb python3 tests/client_dns_integration.py ./src/sniproxy
-      - run: python3 tests/test_client_monitor.py && python3 tests/test_dns_benchmark.py && python3 tests/test_dns_health.py && sudo python3 tests/dns_benchmark_integration.py ./src/sniproxy && sudo python3 tests/dns_runtime_integration.py ./src/sniproxy
+      - run: python3 tests/test_traffic.py && python3 tests/test_client_monitor.py && python3 tests/test_dns_benchmark.py && python3 tests/test_dns_health.py && sudo python3 tests/dns_benchmark_integration.py ./src/sniproxy && sudo python3 tests/dns_runtime_integration.py ./src/sniproxy
       - run: bash -n deploy/install.sh && python3 deploy/test_panel.py
       - name: Install and verify the systemd services
         run: |
@@ -21,6 +21,8 @@ jobs:
           sudo ADGUARD_PUBLIC_IP=8.8.4.4 PANEL_BIND=127.0.0.1 PANEL_HOST=127.0.0.1 bash deploy/install.sh |
             sed -E 's/^(Initial panel password: ).*/\1[redacted]/'
           sudo systemctl is-active sniproxy-managed.service sniproxy-panel.service sniproxy-adguard.service sniproxy-dns-health.service
+          sleep 2
+          sudo python3 -c 'import sys,subprocess; from pathlib import Path; sys.path.insert(0,"/usr/local/lib/sniproxy-managed"); from panel import read_traffic_snapshot; pid=int(subprocess.check_output(["systemctl","show","-p","MainPID","--value","sniproxy-managed.service"])); assert read_traffic_snapshot(Path("/run/sniproxy-traffic.native"),pid)["epoch"] > 0; print("Traffic snapshot works after privilege drop")'
           curl -fsS --noproxy '*' -o /dev/null http://127.0.0.1:3000/
           sudo test -f /etc/sniproxy-managed/adguard-integrated
           curl -fsS --noproxy '*' http://127.0.0.1:3000/control/filtering/status |
@@ -74,6 +76,7 @@ jobs:
             python3 tests/test_dns_benchmark.py
             python3 tests/test_dns_health.py
             python3 tests/test_client_monitor.py
+            python3 tests/test_traffic.py
             python3 tests/dns_benchmark_integration.py ./src/sniproxy
             python3 tests/dns_runtime_integration.py ./src/sniproxy
           '

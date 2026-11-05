@@ -343,6 +343,34 @@ for (const row of ruleRows) {
         }
     });
 }"""
+COUNTRY_SCRIPT += """
+const trafficPanel = document.getElementById("group-traffic-panel");
+const trafficDetails = document.getElementById("traffic-details");
+let trafficBusy = false;
+async function updateTraffic() {
+    if (!trafficPanel || !trafficDetails.open || document.hidden || trafficBusy) return;
+    trafficBusy = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    const error = document.getElementById("traffic-error");
+    try {
+        const response = await fetch("/traffic", {credentials: "same-origin", cache: "no-store", signal: controller.signal});
+        if (!response.ok || response.redirected) throw new Error("更新失败");
+        trafficPanel.innerHTML = await response.text();
+        error.hidden = true;
+    } catch (_) {
+        error.textContent = "流量更新失败，以下为上次结果，当前速度可能已过期。";
+        error.hidden = false;
+    } finally {
+        clearTimeout(timeout);
+        trafficBusy = false;
+    }
+}
+if (trafficDetails) {
+    trafficDetails.addEventListener("toggle", updateTraffic);
+    setInterval(updateTraffic, 5000);
+}
+"""
 COUNTRY_SCRIPT_HASH = base64.b64encode(hashlib.sha256(COUNTRY_SCRIPT.encode()).digest()).decode()
 
 
@@ -471,6 +499,87 @@ button,input,select{{padding:.5rem;margin:.3rem}}section,details{{padding:1rem;b
 <button name="action" value="whitelist">加入白名单</button></form>
 <div class="scroll"><table><thead><tr><th>白名单 IP</th><th>当前连接数</th><th>操作</th></tr></thead>
 <tbody>{white_rows or '<tr><td colspan="3">白名单为空。</td></tr>'}</tbody></table></div></details></html>"""
+
+
+def native_pattern(rule):
+    # Match cfg_tokenizer.c's quote/backslash handling, not Python regex
+    # semantics. The actual matched PCRE rule is reported by the proxy.
+    result, escaped = [], False
+    for char in rule.rsplit(None, 1)[0]:
+        if escaped:
+            result.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char != '"':
+            result.append(char)
+    return "".join(result)
+
+
+def read_traffic_snapshot(path, pid):
+    with path.open("rb") as file:
+        header = file.read(64)
+        sequence, source, epoch = map(int, header.split(b"\n", 1)[0].split())
+        if sequence % 2 or source != pid:
+            raise ValueError("流量快照正在更新或属于旧进程，请刷新。")
+        body = file.read()
+        file.seek(0)
+        if file.read(64) != header:
+            raise ValueError("流量快照正在更新，请刷新。")
+    lines = body.decode("ascii").splitlines()
+    stamp, interval = map(float, lines[0].split())
+    records = []
+    for line in lines[1:]:
+        table, pattern, up, down, delta_up, delta_down = line.split()
+        counts = [int(n) for n in (up, down, delta_up, delta_down)]
+        if any(n < 0 for n in counts):
+            raise ValueError("流量快照计数无效。")
+        records.append(("" if table == "-" else bytes.fromhex(table).decode("utf-8"),
+                        "" if pattern == "-" else bytes.fromhex(pattern).decode("utf-8"), counts))
+    return dict(epoch=epoch, time=stamp, interval=interval, records=records)
+
+
+def traffic_status(config):
+    try:
+        result = command("systemctl", "show", "-p", "MainPID", "--value", SERVICE)
+        pid = int(result.stdout.strip()) if not result.returncode else 0
+        if not pid:
+            return "<p>分组流量：代理未运行。</p>"
+        snapshot = read_traffic_snapshot(Path("/run/sniproxy-traffic.native"), pid)
+    except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+        return "<p>分组流量：等待有效快照（升级后约 5 秒），请刷新。</p>"
+    blocks = domain_blocks(config)
+    names = [f"{i + 1}. {domain_name(block[0])}" for i, block in enumerate(blocks)]
+    owners = {}
+    for i, block in enumerate(blocks):
+        for rule in block:
+            owners.setdefault(native_pattern(rule), i)
+    totals = [[0, 0, 0, 0] for _ in range(len(blocks) + 1)]
+    for table, pattern, counts in snapshot["records"]:
+        index = owners.get(pattern, len(blocks)) if not table else len(blocks)
+        totals[index] = [a + b for a, b in zip(totals[index], counts)]
+    fresh = 0 <= time.time() - snapshot["time"] <= 15 and snapshot["interval"] > 0
+    combined = [sum(t[i] for t in totals) for i in range(4)]
+    def row(name, counts):
+        up, down, du, dd = counts
+        rate_up = du / snapshot["interval"] / 1000000 if fresh else 0
+        rate_down = dd / snapshot["interval"] / 1000000 if fresh else 0
+        share = (up + down) * 100 / (combined[0] + combined[1]) if combined[0] + combined[1] else 0
+        return (f"<tr><td>{html.escape(name)}</td><td>{rate_up:.2f}</td><td>{rate_down:.2f}</td>"
+                f"<td>{up / 1000000:.2f}</td><td>{down / 1000000:.2f}</td>"
+                f"<td>{(up + down) / 1000000:.2f}</td><td>{share:.1f}%</td></tr>")
+    rows = "".join(row(name, totals[i]) for i, name in enumerate(names))
+    if any(totals[-1]):
+        rows += row("其他／未归组（命名表、自定义目标、旧规则等）", totals[-1])
+    start = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(snapshot["epoch"] / 1000000))
+    return (f"<p>累计起点：本次代理启动（服务器时间 {start}）；重启后重新计数。</p>"
+            "<small>客户端视角：上传为发往上游，下载为发往客户端。单位 MB = 1,000,000 字节；速度为约 5 秒平均值。"
+            "仅统计成功转发的 TCP 数据，每个方向只计一次；不含测速进程、其他程序和 IP/TCP 包头，因此不等于网卡总流量。展开后约每 5 秒局部更新。</small>"
+            + ("<p>快照已过期，速度暂显示为 0；累计值为最后一次快照。</p>" if not fresh else "")
+            + "<style>#group-traffic-panel td,#group-traffic-panel th{padding:.45rem;text-align:right;white-space:nowrap}#group-traffic-panel td:first-child{text-align:left}</style>"
+            + "<div style='overflow:auto'><table style='width:100%;border-collapse:collapse'><thead><tr><th>域名组</th><th>上传 MB/s</th><th>下载 MB/s</th>"
+            "<th>累计上传 MB</th><th>累计下载 MB</th><th>累计合计 MB</th><th>累计占比</th></tr></thead><tbody>"
+            + rows + row("全部合计", combined) + "</tbody></table></div>")
 
 
 def dns_health_status():
@@ -851,6 +960,7 @@ class Panel(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy",
                          "default-src 'none'; style-src 'unsafe-inline'; "
+                         "connect-src 'self'; "
                          "frame-ancestors 'none'; form-action 'self'; base-uri 'none'; "
                          f"script-src 'sha256-{COUNTRY_SCRIPT_HASH}'")
         for key, value in headers.items():
@@ -871,6 +981,11 @@ class Panel(BaseHTTPRequestHandler):
             return True
         if ((self.command == "GET" and urlsplit(self.path).path == "/clients") or
                 (self.command == "POST" and self.path == "/clients")):
+            if (ROOT / "password-change-required").is_file():
+                self.reply(303, Location="/")
+                return False
+            return True
+        if self.command == "GET" and self.path == "/traffic":
             if (ROOT / "password-change-required").is_file():
                 self.reply(303, Location="/")
                 return False
@@ -945,6 +1060,8 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
 </style><header class="panel-header"><h1>SNIProxy 管理</h1>
 <a href="/clients">客户端 IP 监控</a>
 <a href="{adguard_link}" {'target="_blank" rel="noopener noreferrer"' if integrated or adguard_url else ""}>AdGuard Home 管理</a></header><p>代理状态：{status}</p><pre>{message}</pre>
+<details id="traffic-details"><summary>域名分组流量监控（MB/s 与累计 MB）</summary>
+<p id="traffic-error" hidden></p><div id="group-traffic-panel">{traffic_status(current)}</div></details>
 <section><h2>域名转发</h2>
 <form method="post" action="/">
 <input type="hidden" name="nonce" value="{NONCE}">
@@ -1077,6 +1194,8 @@ button{{margin:.5rem .5rem .5rem 0;padding:.6rem}}pre{{white-space:pre-wrap}}
         if self.authorized():
             if self.path.startswith("/adguard/"):
                 return self.proxy_adguard()
+            if self.path == "/traffic":
+                return self.reply(200, traffic_status(CONFIG.read_text(encoding="utf-8")))
             if urlsplit(self.path).path == "/clients":
                 try:
                     query = parse_qs(urlsplit(self.path).query, max_num_fields=8)

@@ -68,7 +68,8 @@ table {{
             path = str(Path(tmp) / "events.sock")
             telemetry.bind(path)
             telemetry.settimeout(3)
-            env = dict(os.environ, SNIPROXY_HEALTH_SOCKET=path)
+            traffic = Path(tmp) / "traffic"
+            env = dict(os.environ, SNIPROXY_HEALTH_SOCKET=path, SNIPROXY_TRAFFIC_FILE=str(traffic))
             with subprocess.Popen([str(Path(binary).resolve()), "-f", "-c", str(config)], env=env) as proc:
                 try:
                     runtime.write_text("route.test 127.0.0.60 !\n\n{}")
@@ -82,18 +83,32 @@ table {{
                         raise AssertionError("Proxy did not listen")
                     keep.settimeout(3)
                     stream = keep.makefile("rb")
+                    received = [0]
                     def persistent_request():
                         keep.sendall(b"GET / HTTP/1.1\r\nHost: route.test\r\n\r\n")
-                        assert stream.readline().startswith(b"HTTP/1.1 200")
+                        line = stream.readline()
+                        received[0] += len(line)
+                        assert line.startswith(b"HTTP/1.1 200")
                         length = 0
                         while True:
                             line = stream.readline()
+                            received[0] += len(line)
                             if line == b"\r\n":
                                 break
                             if line.lower().startswith(b"content-length:"):
                                 length = int(line.split(b":")[1])
-                        return stream.read(length).decode()
+                        body = stream.read(length)
+                        received[0] += len(body)
+                        return body.decode()
                     assert persistent_request() == "127.0.0.10"
+                    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "deploy"))
+                    from panel import read_traffic_snapshot
+                    time.sleep(1.2)
+                    data = read_traffic_snapshot(traffic, proc.pid)
+                    record = data["records"][0]
+                    assert record[1] == ".*route[.]test$", record
+                    assert record[2][:2] == [len(b"GET / HTTP/1.1\r\nHost: route.test\r\n\r\n"), received[0]], record
+                    print("PASS: exact live upload/download byte counts; no double counting; matched rule identity")
                     assert b"started 127.0.0.60" in telemetry.recv(512)
                     assert b"connected 127.0.0.60" in telemetry.recv(512)
                     runtime.write_text("route.test 127.0.0.62 !\n\n{}")

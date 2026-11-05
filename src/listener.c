@@ -659,6 +659,7 @@ listener_lookup_server_address(const struct Listener *listener,
         return (struct LookupResult){
             .address = new_addr,
             .caller_free_address = 1,
+            .pattern = table_result.pattern, .table_name = table_result.table_name,
             .use_proxy_header = table_result.use_proxy_header
         };
     } else if (address_port(table_result.address) == 0) {
@@ -671,6 +672,7 @@ listener_lookup_server_address(const struct Listener *listener,
         return (struct LookupResult){
             .address = new_addr,
             .caller_free_address = 1,
+            .pattern = table_result.pattern, .table_name = table_result.table_name,
             .use_proxy_header = table_result.use_proxy_header
         };
     } else {

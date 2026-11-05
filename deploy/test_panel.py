@@ -59,6 +59,8 @@ with tempfile.TemporaryDirectory() as directory:
                  patch.object(panel, "command", return_value=ok) as command, \
                  patch.object(panel, "restart", return_value=True) as restart:
                 assert request(auth=False)[0] == 401
+                assert request(auth=False, path="/traffic")[0] == 401
+                assert request(path="/traffic")[0] == 200
                 assert "old" in request()[1]
                 with patch.object(panel, "current_clients", return_value=({"198.51.100.2": 4}, "")):
                     assert request(auth=False, path="/clients")[0] == 401
@@ -182,6 +184,7 @@ with tempfile.TemporaryDirectory() as directory:
                 assert 'href="#adguard-url"' in request(link)[1]
                 marker = root / "password-change-required"
                 marker.touch()
+                assert request(path="/traffic")[0] == 303
                 assert "首次登录：修改初始密码" in request()[1]
                 assert "请先修改初始密码" in request(link)[1]
                 password = {"action": "change_password", "nonce": panel.NONCE,

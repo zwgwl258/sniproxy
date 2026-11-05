@@ -128,6 +128,7 @@ main(int argc, char **argv) {
     }
 
     /* Drop permissions only when we can */
+    open_traffic();
     drop_perms(config->user ? config->user : default_username, config->group);
 
     ev_signal_init(&sighup_watcher, signal_cb, SIGHUP);
